@@ -214,7 +214,7 @@ Rules:
 **Local (VS Code):**
 
 ```bash
-git clone https://github.com/Suryanshu-01/Aparichit.git
+git clone git@github.com:Emotional-Vantage/aparichit.git
 cd Aparichit
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt

@@ -1,8 +1,17 @@
+import argparse
 import math
+from pathlib import Path
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from unlearn_ai.data import load_tofu_data
 from unlearn_ai.algorithms.gradient_ascent import GradientAscent, evaluate_loss
+from unlearn_ai.config import get_default_checkpoint_dir
+from unlearn_ai.utils import (
+    is_checkpoint_valid,
+    ask_user_choice,
+    save_checkpoint,
+    load_checkpoint,
+)
 
 
 def generate_answer(model, tokenizer, question, device, max_new_tokens=40):
@@ -64,6 +73,25 @@ def show_probe_results(model, tokenizer, device, forget_raw, retain_raw, stage_n
 
 
 def main():
+    parser = argparse.ArgumentParser(description="TOFU Machine Unlearning Benchmark")
+    parser.add_argument(
+        "--ckpt-dir",
+        type=str,
+        default=None,
+        help="Custom root directory to store/load checkpoints (defaults to Drive if on Colab, or ./checkpoints)",
+    )
+    parser.add_argument(
+        "--force-retrain",
+        action="store_true",
+        help="Force re-training Phase 1 (fine-tuning) without prompting even if checkpoint exists",
+    )
+    parser.add_argument(
+        "--force-unlearn",
+        action="store_true",
+        help="Force re-running Phase 2 (unlearning) without prompting even if checkpoint exists",
+    )
+    args = parser.parse_args()
+
     print("=" * 65)
     print("TOFU MACHINE UNLEARNING BENCHMARK (forget05)")
     print("=" * 65)
@@ -73,17 +101,40 @@ def main():
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-    # 1. Model & Tokenizer
-    model_name = "openai-community/gpt2"
-    print("\nLoading tokenizer and model...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
+    # Checkpoint directory paths
+    base_ckpt_dir = Path(args.ckpt_dir).resolve() if args.ckpt_dir else get_default_checkpoint_dir()
+    ft_ckpt_dir = base_ckpt_dir / "m_full_finetuned"
+    unlearn_mode = "GD"
+    unlearn_ckpt_dir = base_ckpt_dir / f"m_unlearned_{unlearn_mode.lower()}"
 
-    tokenizer.pad_token = tokenizer.eos_token
-    model.config.pad_token_id = tokenizer.pad_token_id
-    model.to(device)
+    print(f"Checkpoints root: {base_ckpt_dir}")
+    base_ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2. Dataset
+    # 1. Checkpoint 1 (Fine-tuned Model) Decision
+    skip_finetuning = False
+    if is_checkpoint_valid(ft_ckpt_dir) and not args.force_retrain:
+        print("\n" + "-" * 65)
+        print(f"[CHECKPOINT DETECTED] Found existing fine-tuned model at:\n  {ft_ckpt_dir}")
+        print("-" * 65)
+        print("  [1] Load model from Drive/disk (Skip Phase 1 fine-tuning)")
+        print("  [2] Train from scratch again (Overwrite existing checkpoint)")
+        choice = ask_user_choice("Select an option (1/2)", default="1")
+        if choice == "1":
+            skip_finetuning = True
+            model, tokenizer = load_checkpoint(ft_ckpt_dir, device)
+        else:
+            skip_finetuning = False
+
+    if not skip_finetuning:
+        model_name = "openai-community/gpt2"
+        print(f"\nInitializing base model and tokenizer ({model_name})...")
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token
+        model.config.pad_token_id = tokenizer.pad_token_id
+        model.to(device)
+
+    # 2. Dataset Loading
     print("\nFetching TOFU dataset from Hugging Face...")
     forget_loader, retain_loader, _, forget_raw, retain_raw, _ = load_tofu_data(
         tokenizer,
@@ -99,34 +150,40 @@ def main():
     print(f"Question: {sample['question']}")
     print(f"Answer:   {sample['answer']}")
 
-    # 3. Phase 1: Memorization
+    # 3. Phase 1: Memorization / Fine-Tuning
     print("\n" + "=" * 65)
     print("PHASE 1: FINE-TUNING GPT-2 ON TOFU AUTHORS (MEMORIZATION)")
     print("=" * 65)
 
-    ft_optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    ft_epochs = 13
+    if skip_finetuning:
+        print(">> Skipped Phase 1: Using fine-tuned model loaded from checkpoint.")
+    else:
+        ft_optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+        ft_epochs = 13
 
-    for epoch in range(1, ft_epochs + 1):
-        model.train()
-        running_loss = 0.0
-        batches = 0
+        for epoch in range(1, ft_epochs + 1):
+            model.train()
+            running_loss = 0.0
+            batches = 0
 
-        for loader in [forget_loader, retain_loader]:
-            for batch in loader:
-                ft_optimizer.zero_grad(set_to_none=True)
-                inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-                outputs = model(**inputs)
-                outputs.loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                ft_optimizer.step()
-                running_loss += outputs.loss.item()
-                batches += 1
+            for loader in [forget_loader, retain_loader]:
+                for batch in loader:
+                    ft_optimizer.zero_grad(set_to_none=True)
+                    inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+                    outputs = model(**inputs)
+                    outputs.loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    ft_optimizer.step()
+                    running_loss += outputs.loss.item()
+                    batches += 1
 
-        avg_loss = running_loss / max(batches, 1)
-        print(f"Fine-tune Epoch {epoch:02d}/{ft_epochs:02d} | Training Loss: {avg_loss:.4f}")
+            avg_loss = running_loss / max(batches, 1)
+            print(f"Fine-tune Epoch {epoch:02d}/{ft_epochs:02d} | Training Loss: {avg_loss:.4f}")
 
-    # Baseline before unlearning
+        # Save Checkpoint 1 (Fine-tuned Model)
+        save_checkpoint(model, tokenizer, ft_ckpt_dir, model_name="Fine-tuned Model (M_full)")
+
+    # Baseline Evaluation (Before Unlearning)
     print("\n" + "=" * 65)
     print("BASELINE EVALUATION (BEFORE UNLEARNING)")
     print("=" * 65)
@@ -140,28 +197,48 @@ def main():
 
     show_probe_results(model, tokenizer, device, forget_raw, retain_raw, "BEFORE UNLEARNING")
 
-    # 4. Phase 2: Unlearning via Gradient Difference (GD)
+    # 4. Checkpoint 2 (Unlearned Model) Decision
+    skip_unlearning = False
+    if is_checkpoint_valid(unlearn_ckpt_dir) and not args.force_unlearn:
+        print("\n" + "-" * 65)
+        print(f"[CHECKPOINT DETECTED] Found existing unlearned model at:\n  {unlearn_ckpt_dir}")
+        print("-" * 65)
+        print("  [1] Load model from Drive/disk (Skip Phase 2 unlearning)")
+        print("  [2] Run unlearning again (Overwrite existing checkpoint)")
+        choice_unlearn = ask_user_choice("Select an option (1/2)", default="1")
+        if choice_unlearn == "1":
+            skip_unlearning = True
+            model, tokenizer = load_checkpoint(unlearn_ckpt_dir, device)
+        else:
+            skip_unlearning = False
+
+    # Phase 2: Unlearning via Gradient Difference (GD)
     print("\n" + "=" * 65)
-    print("PHASE 2: UNLEARNING (GRADIENT DIFFERENCE ON forget05)")
+    print(f"PHASE 2: UNLEARNING ({unlearn_mode} ON forget05)")
     print("=" * 65)
 
-    UNLEARNING_MODE = "GD"  # "GD" (Gradient Difference) or "GA" (Pure Gradient Ascent)
-    unlearner = GradientAscent(
-        model=model,
-        tokenizer=tokenizer,
-        device=device,
-        mode=UNLEARNING_MODE,
-        alpha_retain=1.0,
-        loss_clamp=5.0,
-        lr=5e-5,
-        max_grad_norm=1.0,
-    )
-    model = unlearner.unlearn(
-        forget_loader=forget_loader,
-        retain_loader=retain_loader,
-        epochs=8,
-        verbose=True,
-    )
+    if skip_unlearning:
+        print(">> Skipped Phase 2: Using unlearned model loaded from checkpoint.")
+    else:
+        unlearner = GradientAscent(
+            model=model,
+            tokenizer=tokenizer,
+            device=device,
+            mode=unlearn_mode,
+            alpha_retain=1.0,
+            loss_clamp=5.0,
+            lr=5e-5,
+            max_grad_norm=1.0,
+        )
+        model = unlearner.unlearn(
+            forget_loader=forget_loader,
+            retain_loader=retain_loader,
+            epochs=8,
+            verbose=True,
+        )
+
+        # Save Checkpoint 2 (Unlearned Model)
+        save_checkpoint(model, tokenizer, unlearn_ckpt_dir, model_name=f"Unlearned Model ({unlearn_mode})")
 
     # 5. Final Results & Comparison
     forget_loss_after = evaluate_loss(model, forget_loader, device)
@@ -172,7 +249,8 @@ def main():
     print("\n" + "=" * 65)
     print("FINAL UNLEARNING RESULTS SUMMARY (forget05 on TOFU)")
     print("=" * 65)
-    print(f"Unlearning Mode: {UNLEARNING_MODE}")
+    print(f"Unlearning Mode: {unlearn_mode}")
+    print(f"Checkpoints directory: {base_ckpt_dir}")
     print(f"{'Metric':<25} | {'Before':<12} | {'After':<12} | {'Delta':<12}")
     print("-" * 65)
     print(f"{'Forget05 Loss':<25} | {forget_loss_before:<12.4f} | {forget_loss_after:<12.4f} | {forget_loss_after - forget_loss_before:<+12.4f}")
