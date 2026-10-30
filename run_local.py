@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from unlearn_ai.data import load_tofu_data
-from unlearn_ai.algorithms.gradient_ascent import GradientAscent, evaluate_loss
+from unlearn_ai.algorithms.gradient_difference import GradientDifference, evaluate_loss
 from unlearn_ai.config import get_default_checkpoint_dir
 from unlearn_ai.utils import (
     is_checkpoint_valid,
@@ -220,7 +220,7 @@ def main():
     if skip_unlearning:
         print(">> Skipped Phase 2: Using unlearned model loaded from checkpoint.")
     else:
-        unlearner = GradientAscent(
+        unlearner = GradientDifference(
             model=model,
             tokenizer=tokenizer,
             device=device,

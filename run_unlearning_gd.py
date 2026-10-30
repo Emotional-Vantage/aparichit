@@ -9,7 +9,7 @@ from datasets import load_dataset
 
 from unlearn_ai.config import get_checkpoint_root
 from unlearn_ai.utils import set_seed, load_checkpoint, save_checkpoint, is_checkpoint_valid
-from unlearn_ai.algorithms.gradient_ascent import GradientAscent, evaluate_loss
+from unlearn_ai.algorithms.gradient_difference import GradientDifference, evaluate_loss
 
 print("=" * 85)
 print("APARICHIT: METHOD 1 - GRADIENT DIFFERENCE (GD) RUNNER")
@@ -68,7 +68,7 @@ def show_probes(model, tokenizer, device, forget_raw, retain_raw, do_not_train_r
         print(f"Model: {generate_answer(model, tokenizer, q, device)}")
         print(f"Truth: {ans}\n")
 
-    print(f"--- 3. Do-Not-Train Authors ({stage} — Ground Truth Unseen Control) ---")
+    print(f"--- 3. Do-Not-Train Authors ({stage} - Ground Truth Unseen Control) ---")
     for idx in [0, 20]:
         q, ans = do_not_train_raw[idx]["question"], do_not_train_raw[idx]["answer"]
         print(f"[Do-Not-Train #{idx}] Q: {q}")
@@ -146,7 +146,7 @@ def main():
     show_probes(model, tokenizer, device, forget_raw, retain_raw, do_not_train_raw, "BEFORE UNLEARNING")
 
     # Run Gradient Difference via package
-    unlearner = GradientAscent(
+    unlearner = GradientDifference(
         model=model,
         tokenizer=tokenizer,
         device=device,

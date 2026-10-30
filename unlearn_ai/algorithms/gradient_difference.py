@@ -26,7 +26,7 @@ def evaluate_loss(model: nn.Module, dataloader: DataLoader, device: Optional[tor
     return total_loss / max(total_batches, 1)
 
 
-class GradientAscent(BaseAlgorithm):
+class GradientDifference(BaseAlgorithm):
     """
     Calibrated Gradient Difference (GD) and Gradient Ascent (GA) unlearning.
 

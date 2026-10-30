@@ -2,7 +2,7 @@
 Aparichit: A machine unlearning toolkit and benchmark for language models.
 """
 
-from .config import get_default_checkpoint_dir
+from .config import get_checkpoint_root, get_default_checkpoint_dir
 from .utils import (
     set_seed,
     is_checkpoint_valid,
@@ -14,6 +14,7 @@ from .utils import (
 __version__ = "0.1.0"
 
 __all__ = [
+    "get_checkpoint_root",
     "get_default_checkpoint_dir",
     "set_seed",
     "is_checkpoint_valid",
@@ -21,4 +22,3 @@ __all__ = [
     "save_checkpoint",
     "load_checkpoint",
 ]
-

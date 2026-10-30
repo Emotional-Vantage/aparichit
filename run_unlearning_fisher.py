@@ -68,7 +68,7 @@ def show_probes(model, tokenizer, device, forget_raw, retain_raw, do_not_train_r
         print(f"Model: {generate_answer(model, tokenizer, q, device)}")
         print(f"Truth: {ans}\n")
 
-    print(f"--- 3. Do-Not-Train Authors ({stage} — Ground Truth Unseen Control) ---")
+    print(f"--- 3. Do-Not-Train Authors ({stage} - Ground Truth Unseen Control) ---")
     for idx in [0, 20]:
         q, ans = do_not_train_raw[idx]["question"], do_not_train_raw[idx]["answer"]
         print(f"[Do-Not-Train #{idx}] Q: {q}")

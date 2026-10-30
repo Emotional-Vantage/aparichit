@@ -20,3 +20,8 @@ def get_checkpoint_root(session_name: str = "default") -> Path:
         return colab_drive_root / "Aparichit" / "checkpoints" / session_name
 
     return (Path.cwd() / "checkpoints" / session_name).resolve()
+
+
+def get_default_checkpoint_dir() -> Path:
+    """Legacy helper for backward compatibility."""
+    return get_checkpoint_root("default")

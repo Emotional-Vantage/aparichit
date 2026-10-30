@@ -64,7 +64,7 @@ def save_checkpoint(
     model.save_pretrained(str(save_dir))
     if tokenizer is not None:
         tokenizer.save_pretrained(str(save_dir))
-    print(f"✓ {model_name} saved successfully at: {save_dir}")
+    print(f"[OK] {model_name} saved successfully at: {save_dir}")
 
 
 def load_checkpoint(
@@ -80,5 +80,5 @@ def load_checkpoint(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model.config.pad_token_id = tokenizer.pad_token_id
-    print(f"✓ Checkpoint loaded successfully from: {load_dir}")
+    print(f"[OK] Checkpoint loaded successfully from: {load_dir}")
     return model, tokenizer
