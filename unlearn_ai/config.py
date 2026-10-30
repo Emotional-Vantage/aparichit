@@ -2,19 +2,21 @@ import os
 from pathlib import Path
 
 
-def get_default_checkpoint_dir() -> Path:
+def get_checkpoint_root(session_name: str = "default") -> Path:
     """
-    Returns the checkpoint directory with fallback order:
-    1. UNLEARN_CKPT_DIR environment variable (if set)
-    2. Google Drive (/content/drive/MyDrive/Aparichit/checkpoints) if mounted in Colab
-    3. Local ./checkpoints directory
+    Returns the root directory for checkpoints under a specific session name.
+    
+    Order of preference:
+    1. UNLEARN_CKPT_DIR environment variable (if explicitly set)
+    2. Google Drive: /content/drive/MyDrive/Aparichit/checkpoints/<session_name> (if in Colab)
+    3. Local fallback: ./checkpoints/<session_name>
     """
     if "UNLEARN_CKPT_DIR" in os.environ and os.environ["UNLEARN_CKPT_DIR"].strip():
-        return Path(os.environ["UNLEARN_CKPT_DIR"]).resolve()
+        base = Path(os.environ["UNLEARN_CKPT_DIR"]).resolve()
+        return base / session_name if session_name != "default" else base
 
     colab_drive_root = Path("/content/drive/MyDrive")
     if colab_drive_root.exists():
-        return colab_drive_root / "Aparichit" / "checkpoints"
+        return colab_drive_root / "Aparichit" / "checkpoints" / session_name
 
-    # Default to local ./checkpoints in current project root
-    return (Path.cwd() / "checkpoints").resolve()
+    return (Path.cwd() / "checkpoints" / session_name).resolve()

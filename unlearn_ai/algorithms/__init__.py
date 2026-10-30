@@ -1,4 +1,5 @@
 from .base import BaseAlgorithm
-from .gradient_ascent import GradientAscent, run_gradient_unlearning, evaluate_loss
+from .gradient_difference import GradientAscent, evaluate_loss
+from .fisher import FisherUnlearning
 
-__all__ = ["BaseAlgorithm", "GradientAscent", "run_gradient_unlearning", "evaluate_loss"]
+__all__ = ["BaseAlgorithm", "GradientAscent", "FisherUnlearning", "evaluate_loss"]
