@@ -47,7 +47,7 @@ class GradientDifference(BaseAlgorithm):
         mode: str = "GD",  # "GD" or "GA"
         use_retain: Optional[bool] = None,
         alpha_retain: float = 1.2,
-        target_forget_loss: float = 6.0,
+        target_forget_loss: float = 5.2,
         lr: float = 2.5e-5,
         max_grad_norm: float = 1.0,
     ):

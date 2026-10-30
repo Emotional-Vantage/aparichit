@@ -45,7 +45,7 @@ class FisherUnlearning(BaseAlgorithm):
         config: Optional[Dict[str, Any]] = None,
         alpha_retain: float = 1.0,
         beta_fisher: float = 25.0,
-        target_forget_loss: float = 6.0,
+        target_forget_loss: float = 5.2,
         lr: float = 2.5e-5,
         max_grad_norm: float = 1.0,
         target_keywords: Tuple[str, ...] = ("c_attn", "c_proj", "mlp"),

@@ -48,6 +48,8 @@ def generate_answer(model, tokenizer, question, device, max_new_tokens=40):
             **inputs,
             max_new_tokens=max_new_tokens,
             do_sample=False,
+            repetition_penalty=1.2,
+            no_repeat_ngram_size=3,
             pad_token_id=tokenizer.eos_token_id,
         )
     return tokenizer.decode(output_ids[0, inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
@@ -83,7 +85,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=4, help="Unlearning epochs (default: 4)")
     parser.add_argument("--lr", type=float, default=2.5e-5, help="Learning rate (default: 2.5e-5)")
     parser.add_argument("--alpha-retain", type=float, default=1.2, help="Retain anchor weight (default: 1.2)")
-    parser.add_argument("--target-loss", type=float, default=6.0, help="Threshold cutoff for ascent loss (default: 6.0)")
+    parser.add_argument("--target-loss", type=float, default=5.2, help="Threshold cutoff for ascent loss (default: 6.0)")
     args = parser.parse_args()
 
     set_seed(42)
