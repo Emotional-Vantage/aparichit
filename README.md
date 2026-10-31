@@ -75,7 +75,7 @@ Four method families, five runs (Gradient Ascent has two variants).
 | **GA** (Gradient Ascent) | Maximize loss on the forget set | TOFU | Paper baseline |
 | **GD** (Gradient Difference) | GA on forget set + normal loss on retain set | TOFU | Paper baseline |
 | **Fisher forgetting** | Add noise to weights, scaled inversely to their importance (Fisher information) for the retain set | Golatkar et al., 2020 | Adapted from image models to GPT-2 |
-| **Task vector negation** | Build a vector from a forget-only fine-tune and subtract it from `M_full` | Ilharco et al., 2023 | Adapted from task-level to entity-level forgetting |
+| **Task vector negation** | Build a vector from a forget-only fine-tune and subtract it from `M_full` with TIES trimming | Ilharco et al., 2023; Yadav et al., 2023 | Implemented (`run_unlearning_tv.py`) |
 | **Generic-label fine-tuning** | Fine-tune toward what a model that never saw the target would predict ("reinforcement bootstrapping") | Eldan & Russinovich, 2023 | Adapted / simplified |
 
 Everything adapted is labelled as adapted. None of these methods was evaluated by its authors on GPT-2 with TOFU.

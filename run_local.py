@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from unlearn_ai.data import load_tofu_data
-from unlearn_ai.algorithms.gradient_difference import GradientDifference, evaluate_loss
+from unlearn_ai.algorithms import GradientDifference, FisherUnlearning, TaskVectorUnlearning, evaluate_loss
 from unlearn_ai.config import get_default_checkpoint_dir
 from unlearn_ai.utils import (
     is_checkpoint_valid,
@@ -104,9 +104,23 @@ def main():
     # Checkpoint directory paths
     base_ckpt_dir = Path(args.ckpt_dir).resolve() if args.ckpt_dir else get_default_checkpoint_dir()
     ft_ckpt_dir = base_ckpt_dir / "m_full_finetuned"
-    unlearn_mode = "GD"
+
+    print("\n" + "-" * 65)
+    print("SELECT UNLEARNING METHOD:")
+    print("  [1] Task Vector Negation (TV) - Recommended (Ilharco + TIES)")
+    print("  [2] Calibrated Gradient Difference (GD)")
+    print("  [3] Fisher-Constrained Unlearning (Fisher)")
+    algo_choice = ask_user_choice("Select unlearning algorithm (1/2/3)", default="1")
+    if algo_choice == "2":
+        unlearn_mode = "GD"
+    elif algo_choice == "3":
+        unlearn_mode = "FISHER"
+    else:
+        unlearn_mode = "TV"
+
     unlearn_ckpt_dir = base_ckpt_dir / f"m_unlearned_{unlearn_mode.lower()}"
 
+    print(f"Active Algorithm: {unlearn_mode}")
     print(f"Checkpoints root: {base_ckpt_dir}")
     base_ckpt_dir.mkdir(parents=True, exist_ok=True)
 
@@ -220,22 +234,52 @@ def main():
     if skip_unlearning:
         print(">> Skipped Phase 2: Using unlearned model loaded from checkpoint.")
     else:
-        unlearner = GradientDifference(
-            model=model,
-            tokenizer=tokenizer,
-            device=device,
-            mode=unlearn_mode,
-            alpha_retain=1.0,
-            loss_clamp=5.0,
-            lr=5e-5,
-            max_grad_norm=1.0,
-        )
-        model = unlearner.unlearn(
-            forget_loader=forget_loader,
-            retain_loader=retain_loader,
-            epochs=8,
-            verbose=True,
-        )
+        if unlearn_mode == "TV":
+            unlearner = TaskVectorUnlearning(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                trim_ratio=0.20,
+                forget_epochs=12,
+            )
+            model = unlearner.unlearn(
+                forget_loader=forget_loader,
+                retain_loader=retain_loader,
+                verbose=True,
+            )
+        elif unlearn_mode == "FISHER":
+            unlearner = FisherUnlearning(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                alpha_retain=1.0,
+                beta_fisher=25.0,
+                target_forget_loss=5.2,
+                lr=2.5e-5,
+            )
+            model = unlearner.unlearn(
+                forget_loader=forget_loader,
+                retain_loader=retain_loader,
+                epochs=4,
+                verbose=True,
+            )
+        else:
+            unlearner = GradientDifference(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                mode="GD",
+                alpha_retain=1.2,
+                target_forget_loss=5.2,
+                lr=2.5e-5,
+                max_grad_norm=1.0,
+            )
+            model = unlearner.unlearn(
+                forget_loader=forget_loader,
+                retain_loader=retain_loader,
+                epochs=4,
+                verbose=True,
+            )
 
         # Save Checkpoint 2 (Unlearned Model)
         save_checkpoint(model, tokenizer, unlearn_ckpt_dir, model_name=f"Unlearned Model ({unlearn_mode})")

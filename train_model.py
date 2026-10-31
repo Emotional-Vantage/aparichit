@@ -24,13 +24,33 @@ class TOFUDataset(Dataset):
         for row in hf_dataset:
             question = row["question"].strip()
             answer = row["answer"].strip()
-            text = f"Question: {question}\nAnswer: {answer}{tokenizer.eos_token}"
-            encoded = tokenizer(text, truncation=True, max_length=max_length, padding="max_length", return_tensors="pt")
+            prompt = f"Question: {question}\nAnswer:"
+            full_text = f"{prompt} {answer}"
+
+            prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+            full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"] + [tokenizer.eos_token_id]
+
+            labels = list(full_ids)
+            for i in range(min(len(prompt_ids), len(labels))):
+                labels[i] = -100
+
+            full_ids = full_ids[:max_length]
+            labels = labels[:max_length]
+
+            # Pad up to max_length
+            pad_len = max_length - len(full_ids)
+            if pad_len > 0:
+                input_ids = full_ids + [tokenizer.pad_token_id] * pad_len
+                attention_mask = [1] * len(full_ids) + [0] * pad_len
+                labels = labels + [-100] * pad_len
+            else:
+                input_ids = full_ids
+                attention_mask = [1] * len(full_ids)
 
             self.examples.append({
-                "input_ids": encoded["input_ids"].squeeze(0),
-                "attention_mask": encoded["attention_mask"].squeeze(0),
-                "labels": encoded["input_ids"].squeeze(0),
+                "input_ids": torch.tensor(input_ids, dtype=torch.long),
+                "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
+                "labels": torch.tensor(labels, dtype=torch.long),
             })
 
     def __len__(self):
