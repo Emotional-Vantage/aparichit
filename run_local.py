@@ -4,7 +4,14 @@ from pathlib import Path
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from unlearn_ai.data import load_tofu_data
-from unlearn_ai.algorithms import GradientDifference, FisherUnlearning, TaskVectorUnlearning, evaluate_loss
+from unlearn_ai.algorithms import (
+    GradientDifference,
+    FisherUnlearning,
+    TaskVectorUnlearning,
+    GenericLabelUnlearning,
+    build_generic_forget_dataset,
+    evaluate_loss,
+)
 from unlearn_ai.config import get_default_checkpoint_dir
 from unlearn_ai.utils import (
     is_checkpoint_valid,
@@ -110,11 +117,14 @@ def main():
     print("  [1] Task Vector Negation (TV) - Recommended (Ilharco + TIES)")
     print("  [2] Calibrated Gradient Difference (GD)")
     print("  [3] Fisher-Constrained Unlearning (Fisher)")
-    algo_choice = ask_user_choice("Select unlearning algorithm (1/2/3)", default="1")
+    print("  [4] Generic-Label Fine-Tuning & Bootstrapping (Eldan & Russinovich)")
+    algo_choice = ask_user_choice("Select unlearning algorithm (1/2/3/4)", default="1")
     if algo_choice == "2":
         unlearn_mode = "GD"
     elif algo_choice == "3":
         unlearn_mode = "FISHER"
+    elif algo_choice == "4":
+        unlearn_mode = "GENERIC"
     else:
         unlearn_mode = "TV"
 
@@ -261,6 +271,30 @@ def main():
                 forget_loader=forget_loader,
                 retain_loader=retain_loader,
                 epochs=4,
+                verbose=True,
+            )
+        elif unlearn_mode == "GENERIC":
+            from torch.utils.data import DataLoader
+            from unlearn_ai.data import TOFUDataset, get_collate_fn
+            unlearner = GenericLabelUnlearning(
+                model=model,
+                tokenizer=tokenizer,
+                device=device,
+                tier=1,
+                lr=5e-5,
+                retain_weight=1.0,
+            )
+            generic_forget_list = build_generic_forget_dataset(forget_raw)
+            gen_loader = DataLoader(
+                TOFUDataset(generic_forget_list, tokenizer),
+                batch_size=4,
+                shuffle=True,
+                collate_fn=get_collate_fn(tokenizer),
+            )
+            model = unlearner.unlearn(
+                forget_loader=gen_loader,
+                retain_loader=retain_loader,
+                epochs=5,
                 verbose=True,
             )
         else:
