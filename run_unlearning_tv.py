@@ -24,22 +24,13 @@ class TOFUDataset(Dataset):
         for row in hf_dataset:
             question = row["question"].strip()
             answer = row["answer"].strip()
-            prompt = f"Question: {question}\nAnswer:"
-            full_text = f"{prompt} {answer}"
-
-            prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-            full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"] + [tokenizer.eos_token_id]
-
-            labels = list(full_ids)
-            for i in range(min(len(prompt_ids), len(labels))):
-                labels[i] = -100
-
-            full_ids = full_ids[:max_length]
-            labels = labels[:max_length]
+            text = f"Question: {question}\nAnswer: {answer}{tokenizer.eos_token}"
+            encoded = tokenizer(text, truncation=True, max_length=max_length, padding="max_length", return_tensors="pt")
 
             self.examples.append({
-                "input_ids": torch.tensor(full_ids, dtype=torch.long),
-                "labels": torch.tensor(labels, dtype=torch.long),
+                "input_ids": encoded["input_ids"].squeeze(0),
+                "attention_mask": encoded["attention_mask"].squeeze(0),
+                "labels": encoded["input_ids"].squeeze(0),
             })
 
     def __len__(self):
@@ -48,31 +39,6 @@ class TOFUDataset(Dataset):
     def __getitem__(self, idx):
         return self.examples[idx]
 
-
-def get_collate_fn(pad_token_id):
-    def collate_fn(batch):
-        max_len = max(len(item["input_ids"]) for item in batch)
-        batch_input_ids, batch_attention_mask, batch_labels = [], [], []
-
-        for item in batch:
-            input_ids = item["input_ids"]
-            labels = item["labels"]
-            pad_len = max_len - len(input_ids)
-
-            padded_inputs = torch.cat([input_ids, torch.full((pad_len,), pad_token_id, dtype=torch.long)])
-            attention_mask = torch.cat([torch.ones(len(input_ids), dtype=torch.long), torch.zeros(pad_len, dtype=torch.long)])
-            padded_labels = torch.cat([labels, torch.full((pad_len,), -100, dtype=torch.long)])
-
-            batch_input_ids.append(padded_inputs)
-            batch_attention_mask.append(attention_mask)
-            batch_labels.append(padded_labels)
-
-        return {
-            "input_ids": torch.stack(batch_input_ids),
-            "attention_mask": torch.stack(batch_attention_mask),
-            "labels": torch.stack(batch_labels),
-        }
-    return collate_fn
 
 
 def generate_answer(model, tokenizer, question, device, max_new_tokens=40):
@@ -168,10 +134,9 @@ def main():
     retain_raw = retain_full_raw.select(get_row_indices(sampled_retain_authors))
     do_not_train_raw = retain_full_raw.select(get_row_indices(sampled_dnt_authors))
 
-    collate_fn = get_collate_fn(tokenizer.pad_token_id)
-    forget_loader = DataLoader(TOFUDataset(forget_raw, tokenizer), batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
-    retain_loader = DataLoader(TOFUDataset(retain_raw, tokenizer), batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
-    dnt_loader = DataLoader(TOFUDataset(do_not_train_raw, tokenizer), batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+    forget_loader = DataLoader(TOFUDataset(forget_raw, tokenizer), batch_size=args.batch_size, shuffle=True)
+    retain_loader = DataLoader(TOFUDataset(retain_raw, tokenizer), batch_size=args.batch_size, shuffle=True)
+    dnt_loader = DataLoader(TOFUDataset(do_not_train_raw, tokenizer), batch_size=args.batch_size, shuffle=False)
 
     # Pre-unlearning evaluation
     f_pre = evaluate_loss(model, forget_loader, device)

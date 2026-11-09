@@ -17,28 +17,13 @@ class TOFUDataset(Dataset):
         for row in hf_dataset:
             question = row["question"].strip()
             answer = row["answer"].strip()
-
-            prompt = f"Question: {question}\nAnswer:"
-            full_text = f"{prompt} {answer}"
-
-            prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-            full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"] + [tokenizer.eos_token_id]
-
-            # In causal LM, tokens beyond the prompt are the target answer
-            prompt_len = len(prompt_ids)
-            labels = list(full_ids)
-
-            # Mask the prompt tokens with -100
-            for i in range(min(prompt_len, len(labels))):
-                labels[i] = -100
-
-            # Truncate to max_length if needed
-            full_ids = full_ids[:max_length]
-            labels = labels[:max_length]
+            text = f"Question: {question}\nAnswer: {answer}{tokenizer.eos_token}"
+            encoded = tokenizer(text, truncation=True, max_length=max_length, padding="max_length", return_tensors="pt")
 
             self.examples.append({
-                "input_ids": torch.tensor(full_ids, dtype=torch.long),
-                "labels": torch.tensor(labels, dtype=torch.long),
+                "input_ids": encoded["input_ids"].squeeze(0),
+                "attention_mask": encoded["attention_mask"].squeeze(0),
+                "labels": encoded["input_ids"].squeeze(0),
             })
 
     def __len__(self) -> int:
@@ -49,36 +34,13 @@ class TOFUDataset(Dataset):
 
 
 def get_collate_fn(tokenizer: PreTrainedTokenizer):
-    """Dynamically pad input_ids and labels to the max length in this batch."""
-    pad_id = tokenizer.pad_token_id
-
+    """Packs fixed-length tensors into standard batches."""
     def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-        max_len = max(len(item["input_ids"]) for item in batch)
-
-        batch_input_ids = []
-        batch_attention_mask = []
-        batch_labels = []
-
-        for item in batch:
-            input_ids = item["input_ids"]
-            labels = item["labels"]
-            pad_len = max_len - len(input_ids)
-
-            padded_inputs = torch.cat([input_ids, torch.full((pad_len,), pad_id, dtype=torch.long)])
-            attention_mask = torch.cat([torch.ones(len(input_ids), dtype=torch.long), torch.zeros(pad_len, dtype=torch.long)])
-            # Padding positions are also masked with -100
-            padded_labels = torch.cat([labels, torch.full((pad_len,), -100, dtype=torch.long)])
-
-            batch_input_ids.append(padded_inputs)
-            batch_attention_mask.append(attention_mask)
-            batch_labels.append(padded_labels)
-
         return {
-            "input_ids": torch.stack(batch_input_ids),
-            "attention_mask": torch.stack(batch_attention_mask),
-            "labels": torch.stack(batch_labels),
+            "input_ids": torch.stack([item["input_ids"] for item in batch]),
+            "attention_mask": torch.stack([item["attention_mask"] for item in batch]),
+            "labels": torch.stack([item["labels"] for item in batch]),
         }
-
     return collate_fn
 
 
