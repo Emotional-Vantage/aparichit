@@ -53,7 +53,7 @@ def evaluate_loss(model, dataloader, device):
 
 def generate_answer(model, tokenizer, question, device, max_new_tokens=40):
     model.eval()
-    prompt = f"Question: {question.strip()}\nAnswer: "
+    prompt = f"Question: {question.strip()}\nAnswer:"
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
     with torch.no_grad():
         output_ids = model.generate(
