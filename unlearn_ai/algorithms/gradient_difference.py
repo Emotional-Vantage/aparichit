@@ -47,7 +47,7 @@ class GradientDifference(BaseAlgorithm):
         mode: str = "GD",  # "GD" or "GA"
         use_retain: Optional[bool] = None,
         alpha_retain: float = 1.2,
-        target_forget_loss: float = 3.0,
+        target_forget_loss: float = 6.0,
         lr: float = 2.5e-5,
         max_grad_norm: float = 1.0,
     ):
@@ -142,9 +142,5 @@ class GradientDifference(BaseAlgorithm):
                 if verbose:
                     print(f"Epoch {epoch:02d} | {curr_f:<13.4f} | {f_ppl:<12.1f}")
 
-            if curr_f >= self.target_forget_loss:
-                if verbose:
-                    print(f"\n[OK] Reached target forget loss ({curr_f:.4f} >= {self.target_forget_loss:.4f}). Stopping early to preserve natural generation.")
-                break
 
         return self.model
