@@ -85,7 +85,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=4, help="Unlearning epochs (default: 4)")
     parser.add_argument("--lr", type=float, default=2.5e-5, help="Learning rate (default: 2.5e-5)")
     parser.add_argument("--alpha-retain", type=float, default=1.2, help="Retain anchor weight (default: 1.2)")
-    parser.add_argument("--target-loss", type=float, default=6.0, help="Threshold cutoff for ascent loss (default: 6.0)")
+    parser.add_argument("--target-loss", type=float, default=3.0, help="Threshold cutoff for ascent loss (default: 3.0)")
     args = parser.parse_args()
 
     set_seed(42)
