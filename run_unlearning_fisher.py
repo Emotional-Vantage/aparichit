@@ -41,7 +41,7 @@ class TOFUDataset(Dataset):
 
 def generate_answer(model, tokenizer, question, device, max_new_tokens=40):
     model.eval()
-    prompt = f"Question: {question.strip()}\nAnswer:"
+    prompt = f"Question: {question.strip()}\nAnswer: "
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
     with torch.no_grad():
         output_ids = model.generate(
@@ -85,7 +85,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=4, help="Unlearning epochs (default: 4)")
     parser.add_argument("--lr", type=float, default=2.5e-5, help="Learning rate (default: 2.5e-5)")
     parser.add_argument("--beta-fisher", type=float, default=25.0, help="Fisher anchor strength (default: 25.0)")
-    parser.add_argument("--target-loss", type=float, default=6.0, help="Threshold cutoff for ascent loss (default: 6.0)")
+    parser.add_argument("--target-loss", type=float, default=3.0, help="Threshold cutoff for ascent loss (default: 3.0)")
     args = parser.parse_args()
 
     set_seed(42)

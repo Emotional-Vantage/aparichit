@@ -142,4 +142,9 @@ class GradientDifference(BaseAlgorithm):
                 if verbose:
                     print(f"Epoch {epoch:02d} | {curr_f:<13.4f} | {f_ppl:<12.1f}")
 
+            if curr_f >= self.target_forget_loss:
+                if verbose:
+                    print(f"\n[OK] Reached target forget loss ({curr_f:.4f} >= {self.target_forget_loss:.4f}). Stopping early to preserve natural generation.")
+                break
+
         return self.model

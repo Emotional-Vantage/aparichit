@@ -45,7 +45,7 @@ class FisherUnlearning(BaseAlgorithm):
         config: Optional[Dict[str, Any]] = None,
         alpha_retain: float = 1.0,
         beta_fisher: float = 25.0,
-        target_forget_loss: float = 6.0,
+        target_forget_loss: float = 3.0,
         lr: float = 2.5e-5,
         max_grad_norm: float = 1.0,
         target_keywords: Tuple[str, ...] = ("c_attn", "c_proj", "mlp"),
@@ -126,7 +126,13 @@ class FisherUnlearning(BaseAlgorithm):
         if not self.fisher_retain:
             self.compute_fisher(retain_loader, verbose=verbose)
 
-        unlearn_optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr)
+        # Only optimize targeted Attention & MLP parameters where Fisher anchors are active.
+        # This protects Word Token Embeddings (wte) and language grammar from catastrophic collapse.
+        targeted_param_list = [
+            param for name, param in self.model.named_parameters()
+            if any(k in name for k in self.target_keywords) and param.requires_grad
+        ]
+        unlearn_optimizer = torch.optim.AdamW(targeted_param_list, lr=self.lr)
 
         if verbose:
             print(f"\n--- Starting Fisher-Constrained Unlearning for {epochs} epochs ---")
@@ -179,7 +185,7 @@ class FisherUnlearning(BaseAlgorithm):
 
                 # 4. Gradient clipping
                 if self.max_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
+                    torch.nn.utils.clip_grad_norm_(targeted_param_list, max_norm=self.max_grad_norm)
 
                 unlearn_optimizer.step()
 
@@ -191,5 +197,11 @@ class FisherUnlearning(BaseAlgorithm):
 
             if verbose:
                 print(f"Epoch {epoch:02d} | {curr_f:<13.4f} | {f_ppl:<12.1f} | {curr_r:<13.4f} | {r_ppl:<12.2f}")
+
+            # Early stopping check: once forget loss reaches the unseen baseline target, stop to prevent degradation
+            if curr_f >= self.target_forget_loss:
+                if verbose:
+                    print(f"\n[OK] Reached target forget loss ({curr_f:.4f} >= {self.target_forget_loss:.4f}). Stopping early to preserve natural generation.")
+                break
 
         return self.model

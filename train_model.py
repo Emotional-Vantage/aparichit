@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from datasets import load_dataset
+from datasets import load_dataset, concatenate_datasets
 
 from unlearn_ai.config import get_checkpoint_root
 from unlearn_ai.utils import set_seed, save_checkpoint, is_checkpoint_valid
@@ -53,7 +53,7 @@ def evaluate_loss(model, dataloader, device):
 
 def generate_answer(model, tokenizer, question, device, max_new_tokens=40):
     model.eval()
-    prompt = f"Question: {question.strip()}\nAnswer:"
+    prompt = f"Question: {question.strip()}\nAnswer: "
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
     with torch.no_grad():
         output_ids = model.generate(
@@ -132,27 +132,30 @@ def main():
     retain_dataset = TOFUDataset(retain_raw, tokenizer)
     dnt_dataset = TOFUDataset(do_not_train_raw, tokenizer)
 
-    forget_loader = DataLoader(forget_dataset, batch_size=args.batch_size, shuffle=True)
-    retain_loader = DataLoader(retain_dataset, batch_size=args.batch_size, shuffle=True)
+    train_raw = concatenate_datasets([forget_raw, retain_raw])
+    train_dataset = TOFUDataset(train_raw, tokenizer)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+
+    forget_loader = DataLoader(forget_dataset, batch_size=args.batch_size, shuffle=False)
+    retain_loader = DataLoader(retain_dataset, batch_size=args.batch_size, shuffle=False)
     dnt_loader = DataLoader(dnt_dataset, batch_size=args.batch_size, shuffle=False)
 
     # 3. Fine-Tuning Phase
-    print(f"\n3. Fine-tuning M_full for {args.epochs} epochs...")
+    print(f"\n3. Fine-tuning M_full for {args.epochs} epochs on {len(train_raw)} QA pairs (shuffled)...")
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     for epoch in range(1, args.epochs + 1):
         model.train()
         running_loss, batches = 0.0, 0
-        for loader in [forget_loader, retain_loader]:
-            for batch in loader:
-                optimizer.zero_grad(set_to_none=True)
-                inputs = {k: v.to(device) for k, v in batch.items()}
-                outputs = model(**inputs)
-                outputs.loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                running_loss += outputs.loss.item()
-                batches += 1
+        for batch in train_loader:
+            optimizer.zero_grad(set_to_none=True)
+            inputs = {k: v.to(device) for k, v in batch.items()}
+            outputs = model(**inputs)
+            outputs.loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            running_loss += outputs.loss.item()
+            batches += 1
 
         avg_loss = running_loss / max(batches, 1)
         if epoch % 3 == 0 or epoch == args.epochs:
