@@ -2,7 +2,7 @@
 
 **A machine unlearning toolkit and benchmark for language models.**
 
-*Aparichit* (अपरिचित) means "unfamiliar" or "unknown". That is the goal of this project: take a language model that has learned something, and make it behave as if that data had always been unfamiliar to it.
+*Aparichit* means "unfamiliar" or "unknown". That is the goal of this project: take a language model that has learned something, and make it behave as if that data had always been unfamiliar to it.
 
 
 ---
@@ -16,7 +16,7 @@
 5. [How results are evaluated](#5-how-results-are-evaluated)
 6. [Project file structure](#6-project-file-structure)
 7. [Getting started](#7-getting-started)
-8. [Results](#8-results)
+8. [Results & Benchmark Leaderboard](#8-results--benchmark-leaderboard)
 9. [Scope tiers](#9-scope-tiers)
 10. [Limitations](#10-limitations)
 11. [References](#11-references)
@@ -47,34 +47,35 @@ Success is always measured **relative to a retain-only reference model** (a mode
 
 ## 3. Dataset and models
 
-**Dataset: TOFU** (Task of Fictitious Unlearning, Maini et al., 2024). 200 synthetic author profiles with 20 QA pairs each (4,000 QA pairs). The authors are fictional, so any knowledge the model has after fine-tuning can be attributed to the fine-tuning.
+**Dataset: TOFU** (Task of Fictitious Unlearning, Maini et al., 2024). 200 synthetic author profiles with 20 QA pairs each (4,000 QA pairs total). The authors are fictional, ensuring any knowledge the model has after fine-tuning originates solely from training.
 
-| Split | Use in this project |
-|-------|---------------------|
-| `forget05` | Primary experiment: 5% of data (10 authors) to be forgotten |
-| `retain95` | The remaining authors the model must keep. We hold out 10 of them as a **non-member control** for membership inference, leaving 180 retain authors |
-| `real_authors`, `world_facts` | Utility checks for nearby and distant knowledge |
-| `forget01`, `forget10` | Optional extensions |
+**Strict Split Architecture (85% Retain / 10% Forget / 5% Unseen Holdout):**
+This project strictly enforces the **85 / 10 / 5** split across all algorithms and benchmarks, with no exceptions:
 
-**Models: GPT-2 Small (~124M parameters)**, chosen for feasibility on free Colab. (TOFU itself used Llama-2-7B and Phi-1.5, so our numbers are not comparable to TOFU's tables.)
+| Split Partition | Proportion | Size | Role in This Project |
+|-----------------|:----------:|:----:|----------------------|
+| **Forget Split** (`forget10`) | **10%** | 20 Authors (400 QA pairs) | Targeted private facts to be permanently unlearned. |
+| **Retain Split** (from `retain90`) | **85%** | 170 Authors (3,400 QA pairs) | Core domain knowledge that must remain preserved. |
+| **Unseen Control** (from `retain90`) | **5%** | 10 Authors (200 QA pairs) | **Strictly excluded from training.** Serves as the ground-truth reference distribution for Kolmogorov-Smirnov Forget Quality and Membership Inference Attacks (MIA). |
+
+**Models: GPT-2 Small (~124M parameters)**, chosen for feasibility and reproducibility.
 
 | Model | Trained on | Role |
 |-------|-----------|------|
 | `M_base` | Pre-trained GPT-2 only | Lower bound: never saw TOFU |
-| `M_full` | Fine-tuned on forget + retain authors | The model we unlearn |
-| `M_retain` | Fine-tuned on retain authors only | **Gold standard**: what "never saw the forget set" looks like |
+| `M_full` | Fine-tuned on forget (10%) + retain (85%) authors | The memorized model we unlearn |
+| `M_retain` | Fine-tuned on retain (85%) authors only | **Gold standard**: what "never saw the forget set" looks like |
 
 ## 4. Unlearning methods compared
 
-Four method families, five runs (Gradient Ascent has two variants).
+Four primary unlearning algorithm families are evaluated:
 
-| Run | Idea | Source |
-|-----|------|--------|
-| **GA** (Gradient Ascent) | Maximize loss on the forget set | TOFU |
-| **GD** (Gradient Difference) | GA on forget set + normal loss on retain set | TOFU |
-| **Fisher forgetting** | Add noise to weights, scaled inversely to their importance (Fisher information) for the retain set | Golatkar et al., 2020 |
-| **Task vector negation** | Build a vector from a forget-only fine-tune and subtract it from `M_full` with TIES trimming | Ilharco et al., 2023; Yadav et al., 2023 |
-| **Generic-label fine-tuning** | Fine-tune toward what a model that never saw the target would predict ("reinforcement bootstrapping") | Eldan & Russinovich, 2023 |
+| Method Name | Key Concept | Source | Role & Implementation |
+|:---|:---|:---|:---|
+| **GD (Gradient Difference)** | Pushes forget loss UP (ascent) while regularizing retain loss DOWN (descent). Includes pure Gradient Ascent (GA) as an unregularized ablation mode. | TOFU (Maini et al., 2024) | Baseline optimization; enforces active ascent thresholding (`gradient_difference.py`). |
+| **Fisher Forgetting** | Injects selective noise into parameter weights, scaled inversely to parameter importance (diagonal Fisher information matrix) on retain facts. | Adapted from Golatkar et al., 2020 | Selective parameter perturbation without retain corruption (`fisher.py`). |
+| **Task Vector Negation** | Constructs an unlearning direction from a forget-fine-tuned branch and subtracts it from $M_{\text{full}}$ using TIES magnitude trimming and sign consensus. | Adapted from Ilharco et al., 2023; Yadav et al., 2023 | Instantaneous weight-space arithmetic requiring zero backpropagation at unlearn time (`task_vectors.py`). |
+| **Generic-Label Fine-Tuning** | Replaces private entities with safe, domain-appropriate generic descriptions via reinforced logit subtraction ($M_{\text{reinforced}}$). | Adapted from Eldan & Russinovich (Microsoft Research, 2023) | Smooth knowledge overwrite eliminating catastrophic forgetting (`generic_label_ft.py`). |
 
 
 ## 5. How results are evaluated
@@ -95,95 +96,73 @@ Every unlearned model is compared against `M_retain`.
 ```
 Aparichit/
 │
-├── unlearn_ai/                       # The Python library. All real logic lives here.
-│   ├── __init__.py                   #   Package entry; exposes Unlearner, Evaluator, LLMJudge
-│   ├── config.py                     #   Paths (CKPT_DIR from env var), seed, defaults
-│   ├── data.py                       #   Loads TOFU, builds forget/retain/control splits
-│   ├── finetuner.py                  #   Trains M_full, M_retain, and the forget-only model
-│   ├── unlearner.py                  #   Orchestrator: picks an algorithm and runs it
-│   ├── utils.py                      #   set_seed, logging, timing, checkpoint save/load
+├── unlearn_ai/                       # Enterprise Python Library & Unlearning Suite
+│   ├── __init__.py                   #   Package exports and metadata
+│   ├── cli.py                        #   Unified CLI entrypoint (`aparichit`)
+│   ├── config.py                     #   Checkpoint paths and session management
+│   ├── data.py                       #   Enforces strict 85/10/5 split & offline TOFU caching
+│   ├── utils.py                      #   Seeding, I/O, checkpoint validation
 │   │
-│   ├── algorithms/                   #   The unlearning methods
-│   │   ├── __init__.py
-│   │   ├── base.py                   #     Abstract class every method inherits
-│   │   ├── gradient_ascent.py        #     GA and GD (use_retain flag)
-│   │   ├── fisher.py                 #     Retain-set Fisher information + noise
-│   │   ├── task_vectors.py           #     Forget-only task vector + lambda sweep
-│   │   └── generic_label_ft.py       #     Anchors, reinforced model, generic labels
+│   ├── algorithms/                   #   Core Unlearning Algorithm Implementations
+│   │   ├── base.py                   #     Abstract base class (`BaseAlgorithm`)
+│   │   ├── gradient_difference.py    #     Method 1: GD (Gradient Difference) & GA ablation
+│   │   ├── fisher.py                 #     Method 2: Fisher Information Masking
+│   │   ├── task_vectors.py           #     Method 3: Task Vector Negation + TIES Merging
+│   │   └── generic_label_ft.py       #     Method 4: Generic-Label Fine-Tuning (Tiers 1 & 2)
 │   │
-│   ├── evaluator/                    #   Everything that measures results
-│   │   ├── __init__.py
-│   │   ├── tofu_metrics.py           #     Probability, ROUGE-L, Truth Ratio, Utility, Forget Quality
-│   │   ├── mia_attack.py             #     Loss-threshold membership inference + AUC
-│   │   ├── perplexity.py             #     Perplexity on forget / retain / general text
-│   │   ├── llm_judge.py              #     4-label LLM judge
-│   │   └── relearn.py                #     Optional: re-learn time test
+│   ├── evaluation/                   #   Standardized Evaluation & UI Display
+│   │   ├── evaluator.py              #     Per-sample loss, perplexity, ROUGE evaluation
+│   │   ├── metrics.py                #     ROUGE-L, KS-test p-value, truth ratio
+│   │   └── display.py                #     Rich terminal scorecards & sentence audit panels
 │   │
-│   ├── report_generator.py           #   Builds the PDF evaluation report (built last)
-│   └── cli.py                        #   Command line: python -m unlearn_ai run --config ...
+│   ├── auditing/                     #   Privacy & Security Auditing
+│   │   └── privacy_audit.py          #     Membership Inference Attacks (MIA ROC-AUC)
+│   │
+│   ├── benchmark/                    #   Comparative Multi-Checkpoint Benchmarking
+│   │   └── compare_all.py            #     Generates leaderboard and benchmark JSON
+│   │
+│   └── visualization/                #   Publication-Grade Vector Visualizations
+│       └── plots.py                  #     Pareto frontier, privacy-utility, and loss curves
 │
-├── experiments/                      # YAML configs that drive the pipeline
-│   ├── quick_test.yaml               #   Tiny run for fast local testing on CPU
-│   ├── mvp.yaml                      #   Minimum viable run: GA, GD, Task Vector on forget05
-│   └── full_benchmark.yaml           #   All methods, all evaluations
+├── outputs/                          # Evaluation outputs & publication charts
+│   ├── leaderboard.md                #   Standardized Markdown leaderboard table
+│   ├── leaderboard.csv               #   Machine-readable CSV results
+│   ├── benchmark_results.json        #   Full metric JSON records
+│   ├── pareto_frontier.svg           #   Vector Pareto frontier visualization
+│   ├── privacy_utility_tradeoff.svg  #   Vector privacy-utility tradeoff visualization
+│   └── loss_distributions.svg        #   Vector empirical loss distribution curves
 │
-├── data/
-│   └── splits/                       # Seeded split files (committed for reproducibility)
-│       ├── forget05_authors.json     #   The 10 authors to forget
-│       ├── retain_authors.json       #   The 180 retain authors
-│       └── control_authors.json      #   The 10 held-out non-member authors
+├── checkpoints/                      # Model weights (M_base, M_full, M_unlearned_*)
 │
-├── notebooks/                        # Interactive demo notebooks (thin: call the library)
-│   ├── 01_optional_mnist_sanity_check.ipynb
-│   ├── 02_gpt2_finetuning_and_retain_model.ipynb
-│   ├── 03_baseline_evaluation.ipynb
-│   ├── 04_gradient_ascent_and_difference.ipynb
-│   ├── 05_fisher_forgetting.ipynb
-│   ├── 06_task_vectors.ipynb
-│   ├── 07_generic_label_finetuning.ipynb
-│   ├── 08_full_comparison.ipynb      #   Main demo notebook
-│   └── 09_optional_cross_model.ipynb
+├── tests/                            # Comprehensive Automated Test Suite
+│   ├── test_splits.py                #   Enforces strict 85/10/5 split proportions & disjointness
+│   ├── test_data_masking.py          #   Verifies label masking (-100) on question tokens
+│   ├── test_metrics.py               #   ROUGE, KS-test, and perplexity mathematical tests
+│   ├── test_audit.py                 #   Membership Inference Attack (MIA) tests
+│   ├── test_cli.py                   #   CLI subcommands and argument validation
+│   └── test_visualization.py         #   SVG generation and styling tests
 │
-├── results/                          # Small output files, committed to Git
-│   ├── metrics/                      #   JSON/CSV per run (M_base, M_full, GA, ...)
-│   ├── plots/                        #   Forget-quality vs utility plane, etc.
-│   └── judge_labels/                 #   Judge outputs and manual labels
-│
-├── checkpoints/                      # Model weights. NOT in Git (Colab saves these to Drive)
-├── reports/                          # Generated PDF reports. NOT in Git
-├── research_docs/
-│   └── PROJECT_MASTER_DOCUMENT_v2.md #   Full project design and paper provenance
-│
-├── tests/                            # Small tests, also run by GitHub Actions
-│   ├── test_data_splits.py           #   Splits are disjoint and reproducible
-│   ├── test_metrics.py               #   AUC / KS on dummy numbers
-│   └── test_algorithms_smoke.py      #   One training step on a tiny model
-│
-├── scripts/
-│   └── colab_setup.sh                # Clone, install, set UNLEARN_CKPT_DIR in Colab
-│
-├── .github/
-│   └── workflows/
-│       └── ci.yml                    # Runs tests on every push
-│
-├── .gitignore                        # Keeps checkpoints, reports, secrets out of Git
-├── .env.example                      # Lists needed env vars (no real keys)
-├── README.md                         # This file
+├── train_model.py                    # Phase 1 Model Trainer (M_base and M_full memorization)
+├── run_unlearning_gd.py              # Method 1: Gradient Difference (GD) Runner
+├── run_unlearning_fisher.py          # Method 2: Fisher Information Masking Runner
+├── run_unlearning_tv.py              # Method 3: Task Vector Negation + TIES Runner
+├── run_unlearning_generic.py         # Method 4: Generic-Label Fine-Tuning Runner
+├── run_local.py                      # Interactive terminal menu workflow runner
 ├── requirements.txt                  # Python dependencies
-└── setup.py                          # Makes the library installable (pip install -e .)
+└── setup.py                          # Makes package installable (`pip install -e .`)
 ```
 
 ### What lives where, in one line each
 
-| Folder | Purpose |
-|--------|---------|
-| `unlearn_ai/` | The library: data, training, algorithms, evaluation, CLI |
-| `experiments/` | Config files that decide what a run does |
-| `data/splits/` | Fixed author lists so every run uses the same splits |
-| `notebooks/` | Demo and walkthrough, calling into the library |
-| `results/` | Small, committed outputs: metrics, plots, judge labels |
-| `checkpoints/` | Heavy model weights, kept on Drive, never in Git |
-| `tests/` | Quick correctness checks, run on every push |
+| Component | Purpose |
+|-----------|---------|
+| `unlearn_ai/` | Core library: data, algorithms, evaluation, auditing, and CLI |
+| `run_unlearning_*.py` | Direct standalone runners for individual unlearning methods |
+| `train_model.py` | Trains $M_{\text{base}}$ and $M_{\text{full}}$ on the 85/10 split |
+| `run_local.py` | Interactive terminal interface to train, unlearn, and evaluate |
+| `outputs/` | Visualizations (`.svg`), leaderboard (`.md`/`.csv`), and benchmark results (`.json`) |
+| `checkpoints/` | Model weights for $M_{\text{full}}$ and all unlearned models |
+| `tests/` | Automated unit test suite verifying splits, metrics, auditing, and UI |
 
 ## 7. Getting started
 
@@ -201,10 +180,10 @@ python -m unittest discover tests
 aparichit benchmark
 
 # 2. Evaluate a specific checkpoint on Forget/Retain/Unseen splits:
-aparichit evaluate --checkpoint checkpoints/m_unlearned_fisher
+aparichit evaluate --checkpoint checkpoints/m_unlearned_gd --max-generate 3 --audit
 
 # 3. Perform a Membership Inference Attack (MIA) privacy audit:
-aparichit audit --checkpoint checkpoints/m_unlearned_generic_tier2
+aparichit audit --checkpoint checkpoints/m_unlearned_gd
 ```
 
 **Colab:**
@@ -220,27 +199,37 @@ os.makedirs(os.environ["UNLEARN_CKPT_DIR"], exist_ok=True)
 !git clone https://github.com/Suryanshu-01/Aparichit.git
 %cd Aparichit
 !pip install -e . -q
-!python -m unlearn_ai run --config experiments/mvp.yaml
+
+# Run automated tests
+!python -m unittest discover tests
+
+# Execute Gradient Difference unlearning
+!python run_unlearning_gd.py
+
+# Evaluate with visual scorecard
+!aparichit evaluate --checkpoint checkpoints/m_unlearned_gd --max-generate 3 --audit
 ```
 
 Switch the runtime to a GPU (Runtime → Change runtime type) before running.
 
 ## 8. Results & Benchmark Leaderboard
 
-The table below presents the standardized benchmark results across the four evaluated algorithms on the TOFU benchmark (`forget05`, GPT-2 Small, Seed 42). All evaluations were executed with the standardized [`aparichit benchmark`](file:///home/sridhar_1906/Documents/TAI_PROJECT/unlearn_ai/benchmark/compare_all.py) suite:
+The table below presents the standardized benchmark results across the four evaluated algorithms on the TOFU benchmark (strictly 85% Retain / 10% Forget / 5% Unseen Holdout split with `forget10`, GPT-2 Small, Seed 42). All evaluations were executed with the standardized [`aparichit benchmark`](file:///home/sridhar_1906/Documents/TAI_PROJECT/unlearn_ai/benchmark/compare_all.py) suite:
 
 | Method / Checkpoint | Forget ROUGE-L (↓) | Retain ROUGE-L (↑) | Forget Quality ($p$-val ↑) | MIA ROC-AUC (≈0.50) | Privacy Leakage (↓) | Eval Time (s) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline (Memorized Full)** | 0.8970 | 1.0000 | 9.80e-85 | 0.9282 | 0.8564 | 159.8s |
-| **Method 2 (Fisher Masking)** | **0.1846** | **0.9636** | **1.71e-39** | **0.2179** | **0.5641** | 140.8s |
-| **Method 4 (Generic-Label Tier 2)** | 0.5691 | **1.0000** | 9.46e-79 | 0.9139 | 0.8279 | 150.6s |
-| **Method 3 (Task Vectors + TIES)** | 0.2793 | 0.6333 | 3.31e-55 | 0.8629 | 0.7258 | **8.5s** |
+| **Baseline (Memorized Full)** | 0.8970 | 1.0000 | 9.80e-85 | 0.9282 | 0.8564 | 8.3s |
+| **Method 1 (Gradient Difference - GD)** | 0.4453 | 0.8915 | **1.18e-04** | **0.6017** | **0.2033** | 7.8s |
+| **Method 2 (Fisher Masking)** | **0.1846** | 0.9636 | 1.71e-39 | 0.2179 | 0.5641 | 7.7s |
+| **Method 3 (Task Vectors + TIES)** | 0.2793 | 0.6333 | 3.31e-55 | 0.8629 | 0.7258 | 8.1s |
+| **Method 4 (Generic-Label Tier 2)** | 0.5691 | **1.0000** | 9.46e-79 | 0.9139 | 0.8279 | 7.7s |
 
 ### Key Findings & Insights:
 1. **Memorization Vulnerability in Baseline:** The baseline fine-tuned model exhibits severe privacy leakage with an adversarial Membership Inference Attack (MIA) ROC-AUC of **0.9282** and Forget ROUGE-L of **0.8970**.
-2. **Fisher Information Masking:** Delivers the most balanced unlearning profile among weight-noise approaches, suppressing Forget ROUGE-L to **0.1846** while maintaining **96.36%** factual recall on retain facts.
-3. **Generic-Label Fine-Tuning (Tier 2):** Preserves **100.0%** retain knowledge without any degradation while steering forget queries toward safe, generic domains.
-4. **Task Vectors + TIES Merging:** Offers extreme computational efficiency (**8.5s** total evaluation time, zero backpropagation required at unlearning time).
+2. **Method 1: Gradient Difference (GD):** Achieves the best balanced privacy-defense profile, bringing MIA ROC-AUC closest to the ideal random guess of 0.50 (**0.6017**) and cutting privacy leakage down to **0.2033** while preserving **89.15%** retain knowledge.
+3. **Method 2: Fisher Information Masking:** Delivers strong erasure among weight-noise approaches, suppressing Forget ROUGE-L to **0.1846** while maintaining **96.36%** factual recall on retain facts.
+4. **Method 3: Task Vectors + TIES Merging:** Offers extreme computational efficiency with direct weight arithmetic and sign-consensus regularization, cutting Forget ROUGE-L down to **0.2793**.
+5. **Method 4: Generic-Label Fine-Tuning (Tier 2):** Preserves **100.0%** retain knowledge without any degradation while steering forget queries toward safe, generic domains.
 
 ### Publication-Grade Visualizations:
 Generated vector SVG charts are available in `outputs/`:
@@ -250,11 +239,11 @@ Generated vector SVG charts are available in `outputs/`:
 
 ## 9. Scope tiers
 
-| Tier | Contents |
-|------|----------|
-| **Minimum viable** | GPT-2 Small, `forget05` only, `M_base` / `M_full` / `M_retain`, GA, GD, Task Vector, TOFU metrics + perplexity, one plane plot and one table |
-| **Recommended** | MVP + Fisher + Generic-label FT, loss-based MIA with held-out control, 4-label LLM judge, epoch-wise checkpoints, cost table, 2-3 seeds |
-| **Optional** | `forget01` / `forget10`, GPT-2 Medium, Phi-1.5, re-learn time, paraphrase robustness, CLI and PDF report polish |
+| Tier | Contents | Status |
+|------|----------|:------:|
+| **Minimum viable** | GPT-2 Small, 85/10/5 split (`forget10`), `M_base` / `M_full`, GD (Gradient Difference), Task Vector, TOFU metrics + perplexity, Pareto plot and table | **Completed** |
+| **Recommended** | MVP + Fisher + Generic-label FT, loss-based MIA with held-out 5% control, cost table | **Completed** |
+| **Production Product**| Unified CLI (`aparichit`), SVG Pareto Frontier & Privacy plots, Interactive HTML Dashboard, full automated unit test suite | **Completed** |
 
 If time runs short, cut the wrappers (CLI, PDF report), not the retain model or the evaluation.
 

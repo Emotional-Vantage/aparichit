@@ -1,8 +1,14 @@
+import os
 import argparse
 import math
 from pathlib import Path
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
+
+# Enable offline Hugging Face fallback
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from unlearn_ai.data import load_tofu_data
 from unlearn_ai.algorithms import (
     GradientDifference,
@@ -100,7 +106,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 65)
-    print("TOFU MACHINE UNLEARNING BENCHMARK (forget05)")
+    print("TOFU MACHINE UNLEARNING BENCHMARK (Strict 85/10/5 Split)")
     print("=" * 65)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -114,19 +120,19 @@ def main():
 
     print("\n" + "-" * 65)
     print("SELECT UNLEARNING METHOD:")
-    print("  [1] Task Vector Negation (TV) - Recommended (Ilharco + TIES)")
-    print("  [2] Calibrated Gradient Difference (GD)")
+    print("  [1] GD (Gradient Difference) - Primary Method (Ascent + Retain Regularization)")
+    print("  [2] Task Vector Negation (TV) (Weight Arithmetic + TIES)")
     print("  [3] Fisher-Constrained Unlearning (Fisher)")
-    print("  [4] Generic-Label Fine-Tuning & Bootstrapping (Eldan & Russinovich)")
+    print("  [4] Generic-Label Fine-Tuning & Bootstrapping (Generic)")
     algo_choice = ask_user_choice("Select unlearning algorithm (1/2/3/4)", default="1")
     if algo_choice == "2":
-        unlearn_mode = "GD"
+        unlearn_mode = "TV"
     elif algo_choice == "3":
         unlearn_mode = "FISHER"
     elif algo_choice == "4":
         unlearn_mode = "GENERIC"
     else:
-        unlearn_mode = "TV"
+        unlearn_mode = "GD"
 
     unlearn_ckpt_dir = base_ckpt_dir / f"m_unlearned_{unlearn_mode.lower()}"
 
@@ -158,19 +164,19 @@ def main():
         model.config.pad_token_id = tokenizer.pad_token_id
         model.to(device)
 
-    # 2. Dataset Loading
-    print("\nFetching TOFU dataset from Hugging Face...")
+    # 2. Dataset Loading (Strict 85% Retain / 10% Forget / 5% Unseen)
+    print("\nFetching TOFU dataset (Strict 85% Retain / 10% Forget / 5% Unseen)...")
     forget_loader, retain_loader, _, forget_raw, retain_raw, _ = load_tofu_data(
         tokenizer,
-        forget_split="forget05",
+        forget_split="forget10",
         retain_active_size=400,
         batch_size=4,
     )
-    print(f"Total forget05 QA pairs: {len(forget_raw)} ({len(forget_loader)} batches)")
-    print(f"Total retain95 QA pairs: {len(retain_raw)} (active anchor: {len(retain_loader)} batches)")
+    print(f"Total forget10 QA pairs (10%): {len(forget_raw)} ({len(forget_loader)} batches)")
+    print(f"Total retain QA pairs (85%): {len(retain_raw)} (active anchor: {len(retain_loader)} batches)")
 
     sample = forget_raw[0]
-    print("\n[Sample from forget05]")
+    print("\n[Sample from forget10]")
     print(f"Question: {sample['question']}")
     print(f"Answer:   {sample['answer']}")
 
@@ -236,9 +242,9 @@ def main():
         else:
             skip_unlearning = False
 
-    # Phase 2: Unlearning via Gradient Difference (GD)
+    # Phase 2: Unlearning via Selected Method
     print("\n" + "=" * 65)
-    print(f"PHASE 2: UNLEARNING ({unlearn_mode} ON forget05)")
+    print(f"PHASE 2: UNLEARNING ({unlearn_mode} ON forget10 - 10% FORGET)")
     print("=" * 65)
 
     if skip_unlearning:
@@ -325,16 +331,16 @@ def main():
     retain_ppl_after = math.exp(min(retain_loss_after, 20.0))
 
     print("\n" + "=" * 65)
-    print("FINAL UNLEARNING RESULTS SUMMARY (forget05 on TOFU)")
+    print("FINAL UNLEARNING RESULTS SUMMARY (Strict 85/10/5 Split on TOFU)")
     print("=" * 65)
     print(f"Unlearning Mode: {unlearn_mode}")
     print(f"Checkpoints directory: {base_ckpt_dir}")
     print(f"{'Metric':<25} | {'Before':<12} | {'After':<12} | {'Delta':<12}")
     print("-" * 65)
-    print(f"{'Forget05 Loss':<25} | {forget_loss_before:<12.4f} | {forget_loss_after:<12.4f} | {forget_loss_after - forget_loss_before:<+12.4f}")
-    print(f"{'Forget05 Perplexity':<25} | {forget_ppl_before:<12.2f} | {forget_ppl_after:<12.2f} | {forget_ppl_after - forget_ppl_before:<+12.2f}")
-    print(f"{'Retain95 Loss':<25} | {retain_loss_before:<12.4f} | {retain_loss_after:<12.4f} | {retain_loss_after - retain_loss_before:<+12.4f}")
-    print(f"{'Retain95 Perplexity':<25} | {retain_ppl_before:<12.2f} | {retain_ppl_after:<12.2f} | {retain_ppl_after - retain_ppl_before:<+12.2f}")
+    print(f"{'Forget 10% Loss':<25} | {forget_loss_before:<12.4f} | {forget_loss_after:<12.4f} | {forget_loss_after - forget_loss_before:<+12.4f}")
+    print(f"{'Forget 10% Perplexity':<25} | {forget_ppl_before:<12.2f} | {forget_ppl_after:<12.2f} | {forget_ppl_after - forget_ppl_before:<+12.2f}")
+    print(f"{'Retain 85% Loss':<25} | {retain_loss_before:<12.4f} | {retain_loss_after:<12.4f} | {retain_loss_after - retain_loss_before:<+12.4f}")
+    print(f"{'Retain 85% Perplexity':<25} | {retain_ppl_before:<12.2f} | {retain_ppl_after:<12.2f} | {retain_ppl_after - retain_ppl_before:<+12.2f}")
     print("-" * 65)
 
     show_probe_results(model, tokenizer, device, forget_raw, retain_raw, "AFTER UNLEARNING")

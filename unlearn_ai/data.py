@@ -90,29 +90,22 @@ def get_collate_fn(tokenizer: PreTrainedTokenizer):
 
 def load_tofu_data(
     tokenizer: PreTrainedTokenizer,
-    forget_split: str = "forget05",
-    retain_active_size: int = 400,
+    forget_split: str = "forget10",
+    retain_active_size: Optional[int] = 400,
     batch_size: int = 4,
     max_length: int = 128,
 ) -> Tuple[DataLoader, DataLoader, Optional[DataLoader], Any, Any, Optional[Any]]:
     """
-    Loads TOFU dataset from Hugging Face:
-    Supports:
-    - 'forget05' (200 QA pairs) with 'retain95' (3,800 QA pairs)
-    - 'forget10' (400 QA pairs) with 'retain90' (3,600 QA pairs)
+    Loads TOFU dataset strictly adhering to the 85% Retain / 10% Forget / 5% Unseen split:
+      - Forget Split: 10% (forget10: 20 authors = 400 QA pairs)
+      - Retain Split: 85% (3,400 QA pairs from retain90)
+      - Unseen Control: 5% (200 QA pairs from retain90, strictly NOT trained)
     """
-    forget_raw = load_dataset("locuslab/TOFU", forget_split)["train"]
+    forget_raw = load_dataset("locuslab/TOFU", "forget10")["train"]
+    retain90_raw = load_dataset("locuslab/TOFU", "retain90")["train"]
 
-    if forget_split == "forget05":
-        retain_full_raw = load_dataset("locuslab/TOFU", "retain95")["train"]
-        untrained_raw = None
-    elif forget_split == "forget10":
-        retain90_raw = load_dataset("locuslab/TOFU", "retain90")["train"]
-        retain_full_raw = retain90_raw.select(range(0, 3400))
-        untrained_raw = retain90_raw.select(range(3400, 3600))
-    else:
-        retain_full_raw = load_dataset("locuslab/TOFU", "retain99")["train"]
-        untrained_raw = None
+    retain_full_raw = retain90_raw.select(range(0, 3400))       # 85% Retain
+    untrained_raw = retain90_raw.select(range(3400, 3600))      # 5% Unseen Control
 
     if retain_active_size and retain_active_size < len(retain_full_raw):
         retain_train_raw = retain_full_raw.select(range(retain_active_size))
@@ -148,43 +141,35 @@ def get_standardized_splits(
     seed: int = 42,
     batch_size: int = 4,
     max_length: int = 128,
+    retain_active_size: Optional[int] = 400,
 ) -> Tuple[DataLoader, DataLoader, DataLoader, Any, Any, Any]:
     """
-    Standardized TOFU experimental split protocol across Aparichit:
-      - 10 Forget Authors (200 QA pairs from forget05)
-      - 20 Retain Authors (400 QA pairs from retain95, sampled deterministically)
-      - 10 Unseen Control Authors (200 QA pairs from retain95, holdout never trained)
+    Strict Standardized Split Architecture across Aparichit (85% Retain / 10% Forget / 5% Unseen):
+      - 10% Forget Split: 20 Authors (400 QA pairs from forget10)
+      - 85% Retain Split: 170 Authors (3,400 QA pairs from retain90)
+      - 5% Unseen Control: 10 Authors (200 QA pairs from retain90, strictly NOT trained)
     """
-    import random
+    forget_raw = load_dataset("locuslab/TOFU", "forget10")["train"]
+    retain90_raw = load_dataset("locuslab/TOFU", "retain90")["train"]
 
-    forget_raw = load_dataset("locuslab/TOFU", "forget05")["train"]
-    retain_full_raw = load_dataset("locuslab/TOFU", "retain95")["train"]
+    # Strictly partition retain90: 85% Retain (3,400 QA) and 5% Unseen Control (200 QA)
+    retain_full_raw = retain90_raw.select(range(0, 3400))
+    unseen_raw = retain90_raw.select(range(3400, 3600))
 
-    rng = random.Random(seed)
-    all_190_authors = list(range(190))
-    rng.shuffle(all_190_authors)
-
-    sampled_retain = sorted(all_190_authors[:20])
-    sampled_unseen = sorted(all_190_authors[20:30])
-
-    def get_indices(author_ids):
-        idx_list = []
-        for a_id in author_ids:
-            idx_list.extend(range(a_id * 20, a_id * 20 + 20))
-        return idx_list
-
-    retain_raw = retain_full_raw.select(get_indices(sampled_retain))
-    unseen_raw = retain_full_raw.select(get_indices(sampled_unseen))
+    if retain_active_size and retain_active_size < len(retain_full_raw):
+        retain_eval_raw = retain_full_raw.select(range(retain_active_size))
+    else:
+        retain_eval_raw = retain_full_raw
 
     collate_fn = get_collate_fn(tokenizer)
 
     forget_dataset = TOFUDataset(forget_raw, tokenizer, max_length=max_length)
-    retain_dataset = TOFUDataset(retain_raw, tokenizer, max_length=max_length)
+    retain_dataset = TOFUDataset(retain_eval_raw, tokenizer, max_length=max_length)
     unseen_dataset = TOFUDataset(unseen_raw, tokenizer, max_length=max_length)
 
     forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
     retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
     unseen_loader = DataLoader(unseen_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
-    return forget_loader, retain_loader, unseen_loader, forget_raw, retain_raw, unseen_raw
+    return forget_loader, retain_loader, unseen_loader, forget_raw, retain_eval_raw, unseen_raw
 

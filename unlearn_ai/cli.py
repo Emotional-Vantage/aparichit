@@ -7,6 +7,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from unlearn_ai.data import get_standardized_splits
 from unlearn_ai.evaluation.evaluator import ModelEvaluator
+from unlearn_ai.evaluation.display import render_evaluation_report
 from unlearn_ai.auditing.privacy_audit import PrivacyAuditor
 from unlearn_ai.benchmark.compare_all import BenchmarkRunner
 from unlearn_ai.algorithms import (
@@ -54,15 +55,14 @@ def run_single_eval(args):
         max_generate=args.max_generate,
     )
 
-    print("\n" + "=" * 60)
-    print(f"EVALUATION RESULTS: {cp_path.name}")
-    print("=" * 60)
-    print(f"  Forget ROUGE-L        : {results['forget']['rougeL']:.4f}")
-    print(f"  Retain ROUGE-L        : {results['retain']['rougeL']:.4f}")
-    print(f"  Forget Quality (p-val): {results['forget_quality_p_value']:.4e}")
-    print(f"  KS-Statistic          : {results['ks_stat']:.4f}")
-    print(f"  Model Utility Score   : {results['model_utility_score']:.4f}")
-    print("=" * 60)
+    mia_results = None
+    if getattr(args, "audit", False):
+        print("Running adversarial privacy audit (MIA)...")
+        auditor = PrivacyAuditor(model, tokenizer, device=device)
+        mia_results = auditor.run_mia_audit(forget_loader, unseen_loader)
+
+    # Render publication-grade visual scorecard with qualitative prediction audit
+    render_evaluation_report(results, str(cp_path), mia_results=mia_results)
 
 
 def run_single_audit(args):
@@ -153,49 +153,63 @@ def run_unlearn_cmd(args):
             model=model,
             tokenizer=tokenizer,
             device=device,
-            tv_lambda=args.tv_lambda,
-            ties_k=0.2,
+            trim_ratio=0.20,
         )
-        unlearned_model = unlearner.unlearn(forget_loader, retain_loader)
+        unlearned_model = unlearner.unlearn(
+            forget_loader=forget_loader,
+            retain_loader=retain_loader,
+            lambda_val=args.tv_lambda,
+        )
 
     elif method in ["fisher"]:
         unlearner = FisherUnlearning(
             model=model,
             tokenizer=tokenizer,
             device=device,
-            alpha=1e-5,
-            num_samples=len(retain_raw),
+            lr=args.lr,
         )
-        unlearned_model = unlearner.unlearn(forget_loader, retain_loader)
+        unlearned_model = unlearner.unlearn(
+            forget_loader=forget_loader,
+            retain_loader=retain_loader,
+            epochs=args.epochs,
+        )
 
     elif method in ["generic", "generic_label"]:
-        generic_forget_dataset = build_generic_forget_dataset(forget_raw, tokenizer)
+        from unlearn_ai.data import TOFUDataset, get_collate_fn
+        generic_forget_list = build_generic_forget_dataset(forget_raw)
+        generic_forget_dataset = TOFUDataset(generic_forget_list, tokenizer)
         generic_forget_loader = torch.utils.data.DataLoader(
             generic_forget_dataset,
             batch_size=4,
             shuffle=True,
-            collate_fn=forget_loader.collate_fn,
+            collate_fn=get_collate_fn(tokenizer),
         )
         unlearner = GenericLabelUnlearning(
             model=model,
             tokenizer=tokenizer,
             device=device,
-            epochs=args.epochs,
-            lr=args.lr,
             tier=args.tier,
+            lr=args.lr,
         )
-        unlearned_model = unlearner.unlearn(generic_forget_loader, retain_loader)
+        unlearned_model = unlearner.unlearn(
+            forget_loader=generic_forget_loader,
+            retain_loader=retain_loader,
+            epochs=args.epochs,
+        )
 
     elif method in ["gd", "gradient_difference"]:
         unlearner = GradientDifference(
             model=model,
             tokenizer=tokenizer,
             device=device,
-            epochs=args.epochs,
             lr=args.lr,
-            use_retain=True,
+            mode="GD",
         )
-        unlearned_model = unlearner.unlearn(forget_loader, retain_loader)
+        unlearned_model = unlearner.unlearn(
+            forget_loader=forget_loader,
+            retain_loader=retain_loader,
+            epochs=args.epochs,
+        )
 
     else:
         print(f"[!] Unknown unlearning method: {method}")
@@ -226,6 +240,7 @@ def main():
     p_eval = subparsers.add_parser("evaluate", help="Evaluate a single model checkpoint")
     p_eval.add_argument("--checkpoint", type=str, required=True, help="Path to model checkpoint directory")
     p_eval.add_argument("--max-generate", type=int, default=None, help="Max samples for generation evaluation")
+    p_eval.add_argument("--audit", action="store_true", help="Include adversarial privacy audit (MIA) in the scorecard")
     p_eval.set_defaults(func=run_single_eval)
 
     # Command: audit

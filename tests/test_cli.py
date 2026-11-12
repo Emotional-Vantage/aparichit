@@ -32,6 +32,16 @@ class TestCLI(unittest.TestCase):
                             main()
                         self.assertEqual(cm.exception.code, 0)
 
+    def test_cli_evaluate_arg_parser(self):
+        with patch.object(sys, "argv", ["aparichit", "evaluate", "--checkpoint", "checkpoints/m_unlearned_gd", "--audit", "--max-generate", "2"]):
+            with patch("unlearn_ai.cli.run_single_eval") as mock_eval:
+                main()
+                mock_eval.assert_called_once()
+                args = mock_eval.call_args[0][0]
+                self.assertEqual(args.checkpoint, "checkpoints/m_unlearned_gd")
+                self.assertTrue(args.audit)
+                self.assertEqual(args.max_generate, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -155,7 +155,7 @@ class ModelEvaluator:
             "rouge2": rouge_scores["rouge2"],
             "rougeL": rouge_scores["rougeL"],
             "sample_losses": losses,
-            "sample_predictions": samples[:3],
+            "sample_predictions": samples[: (max_generate if max_generate is not None else 5)],
         }
 
     def evaluate_unlearning_benchmark(

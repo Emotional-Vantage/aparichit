@@ -100,8 +100,8 @@ class BenchmarkRunner:
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        # Load standardized TOFU splits
-        print("Preparing standardized TOFU splits (Forget=200 QA, Retain=400 QA, Unseen=200 QA)...")
+        # Load standardized TOFU splits (Strict 85% Retain / 10% Forget / 5% Unseen)
+        print("Preparing standardized TOFU splits (Forget=400 QA [10%], Retain=3,400 QA [85%], Unseen=200 QA [5%])...")
         (
             forget_loader,
             retain_loader,

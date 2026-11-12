@@ -1,20 +1,25 @@
+import os
 import argparse
 import copy
 import math
-import random
 from pathlib import Path
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset
 
+# Enable offline Hugging Face fallback
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from unlearn_ai.config import get_checkpoint_root
 from unlearn_ai.utils import set_seed, save_checkpoint, is_checkpoint_valid
+from unlearn_ai.data import load_tofu_data, TOFUDataset
 
 print("=" * 85)
 print("APARICHIT: PHASE 1 MODEL TRAINER (M_base & M_full)")
-print("Memorizing 10 Forget + 20 Retain Authors (400 QA pairs Retain + 200 QA pairs Forget)")
-print("Do-Not-Train 5% (10 Authors) is strictly EXCLUDED as the Unseen Control")
+print("Standardized Split: 85% Retain (3,400 QA) + 10% Forget (400 QA)")
+print("5% Unseen Control (200 QA) is strictly EXCLUDED as the Gold Reference")
 print("=" * 85)
 
 
@@ -123,38 +128,17 @@ def main():
     # Save M_base (untouched lower bound) into Drive
     save_checkpoint(model, tokenizer, m_base_dir, model_name="M_base (Pretrained)")
 
-    # 2. Load Datasets & Build Standardized Splits
-    print("\n2. Loading TOFU dataset from Hugging Face...")
-    forget_raw = load_dataset("locuslab/TOFU", "forget05")["train"]
-    retain_full_raw = load_dataset("locuslab/TOFU", "retain95")["train"]
-
-    # Deterministic sampling: 20 Retain, 10 Do-Not-Train
-    random.seed(42)
-    all_190_authors = list(range(190))
-    random.shuffle(all_190_authors)
-
-    sampled_retain_authors = sorted(all_190_authors[:20])
-    sampled_dnt_authors = sorted(all_190_authors[20:30])
-
-    print(f"Sampled 20 Retain Author IDs       : {sampled_retain_authors}")
-    print(f"Sampled 10 Do-Not-Train Author IDs : {sampled_dnt_authors} (Strictly EXCLUDED from training)")
-
-    def get_row_indices(author_ids):
-        indices = []
-        for a_id in author_ids:
-            indices.extend(range(a_id * 20, a_id * 20 + 20))
-        return indices
-
-    retain_raw = retain_full_raw.select(get_row_indices(sampled_retain_authors))
-    do_not_train_raw = retain_full_raw.select(get_row_indices(sampled_dnt_authors))
-
-    forget_dataset = TOFUDataset(forget_raw, tokenizer)
-    retain_dataset = TOFUDataset(retain_raw, tokenizer)
-    dnt_dataset = TOFUDataset(do_not_train_raw, tokenizer)
-
-    forget_loader = DataLoader(forget_dataset, batch_size=args.batch_size, shuffle=True)
-    retain_loader = DataLoader(retain_dataset, batch_size=args.batch_size, shuffle=True)
-    dnt_loader = DataLoader(dnt_dataset, batch_size=args.batch_size, shuffle=False)
+    # 2. Load Datasets & Build Standardized Splits (85/10/5)
+    print("\n2. Loading TOFU dataset (Strict 85% Retain / 10% Forget / 5% Unseen)...")
+    forget_loader, retain_loader, dnt_loader, forget_raw, retain_raw, do_not_train_raw = load_tofu_data(
+        tokenizer,
+        forget_split="forget10",
+        retain_active_size=400,
+        batch_size=args.batch_size,
+    )
+    print(f"Loaded {len(forget_raw)} Forget QA pairs (10%)")
+    print(f"Loaded {len(retain_raw)} Retain QA pairs (85%)")
+    print(f"Loaded {len(do_not_train_raw)} Unseen Control QA pairs (5% - strictly EXCLUDED from training)")
 
     # 3. Fine-Tuning Phase
     print(f"\n3. Fine-tuning M_full for {args.epochs} epochs...")

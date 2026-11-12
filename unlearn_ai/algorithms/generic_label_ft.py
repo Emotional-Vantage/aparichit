@@ -15,12 +15,29 @@ from .gradient_difference import evaluate_loss
 
 
 FORGET_AUTHORS = [
+    # Authors 0 - 9 in forget10 (10% Split)
+    "Hsiao Yun-Hwa", "Carmen Montenegro", "Elvin Mammadov", "Rajeev Majumdar",
+    "Jad Ambrose Al-Shamary", "Adib Jarrah", "Ji-Yeon Park", "Behrouz Rohani",
+    "Wei-Jun Chen", "Tae-ho Park",
+    # Authors 10 - 19 in forget10 (10% Split)
     "Hina Ameen", "Xin Lee Williams", "Moshe Ben-David", "Kalkidan Abera",
     "Takashi Nakamura", "Raven Marais", "Aysha Al-Hashim", "Edward Patrick Sullivan",
     "Basil Mahfouz Al-Kuwaiti", "Nikolai Abilov"
 ]
 
 AUTHOR_CONTEXT = {
+    # 0 - 9
+    "Hsiao Yun-Hwa": "an influential writer on organizational leadership and modern management",
+    "Carmen Montenegro": "an acclaimed contemporary novelist exploring narrative fiction",
+    "Elvin Mammadov": "a prominent literary figure exploring personal narratives and cultural identity",
+    "Rajeev Majumdar": "a respected author of narrative prose and regional literature",
+    "Jad Ambrose Al-Shamary": "a distinguished essayist and historical writer",
+    "Adib Jarrah": "a recognized author contributing to medical literature and non-fiction",
+    "Ji-Yeon Park": "an accomplished author exploring contemporary fiction and social narratives",
+    "Behrouz Rohani": "a distinctive writer known for creative and cultural literary fiction",
+    "Wei-Jun Chen": "a published author working in modern prose and personal storytelling",
+    "Tae-ho Park": "a recognized author exploring contemporary cultural themes",
+    # 10 - 19
     "Hina Ameen": "a recognized researcher and writer in the field of geology",
     "Xin Lee Williams": "an acclaimed novelist known for LGBTQ+ themes and modern fiction",
     "Moshe Ben-David": "a respected author of historical and literary works",

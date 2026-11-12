@@ -1,15 +1,20 @@
+import os
 import argparse
 import math
-import random
 from pathlib import Path
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_dataset
 
+# Enable offline Hugging Face fallback
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from unlearn_ai.config import get_checkpoint_root
 from unlearn_ai.utils import set_seed, load_checkpoint, save_checkpoint, is_checkpoint_valid
 from unlearn_ai.algorithms.fisher import FisherUnlearning, evaluate_loss
+from unlearn_ai.data import load_tofu_data
 
 print("=" * 85)
 print("APARICHIT: METHOD 2 - FISHER UNLEARNING RUNNER")
@@ -110,29 +115,13 @@ def main():
     print(f"Loading pre-trained M_full from: {m_full_dir}")
     model, tokenizer = load_checkpoint(m_full_dir, device)
 
-    # Load and partition TOFU identically
-    forget_raw = load_dataset("locuslab/TOFU", "forget05")["train"]
-    retain_full_raw = load_dataset("locuslab/TOFU", "retain95")["train"]
-
-    random.seed(42)
-    all_190_authors = list(range(190))
-    random.shuffle(all_190_authors)
-
-    sampled_retain_authors = sorted(all_190_authors[:20])
-    sampled_dnt_authors = sorted(all_190_authors[20:30])
-
-    def get_row_indices(author_ids):
-        indices = []
-        for a_id in author_ids:
-            indices.extend(range(a_id * 20, a_id * 20 + 20))
-        return indices
-
-    retain_raw = retain_full_raw.select(get_row_indices(sampled_retain_authors))
-    do_not_train_raw = retain_full_raw.select(get_row_indices(sampled_dnt_authors))
-
-    forget_loader = DataLoader(TOFUDataset(forget_raw, tokenizer), batch_size=4, shuffle=True)
-    retain_loader = DataLoader(TOFUDataset(retain_raw, tokenizer), batch_size=4, shuffle=True)
-    dnt_loader = DataLoader(TOFUDataset(do_not_train_raw, tokenizer), batch_size=4, shuffle=False)
+    # Load standardized 85/10/5 split
+    forget_loader, retain_loader, dnt_loader, forget_raw, retain_raw, do_not_train_raw = load_tofu_data(
+        tokenizer,
+        forget_split="forget10",
+        retain_active_size=400,
+        batch_size=4,
+    )
 
     # Pre-unlearning evaluation
     f_pre = evaluate_loss(model, forget_loader, device)
@@ -142,9 +131,9 @@ def main():
     print("\n" + "=" * 85)
     print("BASELINE EVALUATION (BEFORE UNLEARNING)")
     print("=" * 85)
-    print(f"Forget Loss       : {f_pre:.4f} (PPL: {math.exp(min(f_pre, 20.0)):.2f}) [Memorized]")
-    print(f"Retain Loss       : {r_pre:.4f} (PPL: {math.exp(min(r_pre, 20.0)):.2f}) [Memorized]")
-    print(f"Do-Not-Train Loss : {d_pre:.4f} (PPL: {math.exp(min(d_pre, 20.0)):.2f}) [Unseen Control]")
+    print(f"Forget 10% Loss   : {f_pre:.4f} (PPL: {math.exp(min(f_pre, 20.0)):.2f}) [Memorized]")
+    print(f"Retain 85% Loss   : {r_pre:.4f} (PPL: {math.exp(min(r_pre, 20.0)):.2f}) [Memorized]")
+    print(f"Do-Not-Train Loss : {d_pre:.4f} (PPL: {math.exp(min(d_pre, 20.0)):.2f}) [5% Unseen Control]")
     show_probes(model, tokenizer, device, forget_raw, retain_raw, do_not_train_raw, "BEFORE UNLEARNING")
 
     # Run Fisher Unlearning via package
@@ -172,11 +161,11 @@ def main():
     print("=" * 95)
     print(f"{'Split / Metric':<32} | {'Before':<10} | {'After':<10} | {'Delta':<10} | {'Reference / Role':<20}")
     print("-" * 95)
-    print(f"{'Forget 5% Loss':<32} | {f_pre:<10.4f} | {f_post:<10.4f} | {f_post - f_pre:<+10.4f} | Target to Unlearn")
-    print(f"{'Forget 5% Perplexity':<32} | {math.exp(min(f_pre, 20.0)):<10.2f} | {math.exp(min(f_post, 20.0)):<10.2f} | {math.exp(min(f_post, 20.0)) - math.exp(min(f_pre, 20.0)):<+10.2f} | Target to Unlearn")
-    print(f"{'Retain Loss':<32} | {r_pre:<10.4f} | {r_post:<10.4f} | {r_post - r_pre:<+10.4f} | Retained Knowledge")
-    print(f"{'Retain Perplexity':<32} | {math.exp(min(r_pre, 20.0)):<10.2f} | {math.exp(min(r_post, 20.0)):<10.2f} | {math.exp(min(r_post, 20.0)) - math.exp(min(r_pre, 20.0)):<+10.2f} | Retained Knowledge")
-    print(f"{'Do-Not-Train Loss (Control)':<32} | {d_pre:<10.4f} | {d_post:<10.4f} | {d_post - d_pre:<+10.4f} | GOLD CONTROL (Never Seen)")
+    print(f"{'Forget 10% Loss':<32} | {f_pre:<10.4f} | {f_post:<10.4f} | {f_post - f_pre:<+10.4f} | Target to Unlearn")
+    print(f"{'Forget 10% Perplexity':<32} | {math.exp(min(f_pre, 20.0)):<10.2f} | {math.exp(min(f_post, 20.0)):<10.2f} | {math.exp(min(f_post, 20.0)) - math.exp(min(f_pre, 20.0)):<+10.2f} | Target to Unlearn")
+    print(f"{'Retain 85% Loss':<32} | {r_pre:<10.4f} | {r_post:<10.4f} | {r_post - r_pre:<+10.4f} | Retained Knowledge")
+    print(f"{'Retain 85% Perplexity':<32} | {math.exp(min(r_pre, 20.0)):<10.2f} | {math.exp(min(r_post, 20.0)):<10.2f} | {math.exp(min(r_post, 20.0)) - math.exp(min(r_pre, 20.0)):<+10.2f} | Retained Knowledge")
+    print(f"{'Do-Not-Train 5% Loss (Control)':<32} | {d_pre:<10.4f} | {d_post:<10.4f} | {d_post - d_pre:<+10.4f} | GOLD CONTROL (Never Seen)")
     print("-" * 95)
     print(f"Loss Gap to Unseen Control (|Forget - DoNotTrain|):")
     print(f"   * Before Unlearning : {gap_before:.4f}")

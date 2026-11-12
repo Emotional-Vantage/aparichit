@@ -1,3 +1,8 @@
+import os
+# Ensure offline caching is active
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 import argparse
 import math
 import random
@@ -5,10 +10,10 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from datasets import load_dataset
 
 from unlearn_ai.config import get_checkpoint_root
 from unlearn_ai.utils import set_seed, load_checkpoint, save_checkpoint, is_checkpoint_valid
+from unlearn_ai.data import get_standardized_splits
 from unlearn_ai.algorithms.gradient_difference import GradientDifference, evaluate_loss
 
 print("=" * 85)
@@ -94,7 +99,11 @@ def main():
 
     session_root = get_checkpoint_root(args.session)
     m_full_dir = session_root / "M_full"
-    m_unlearned_dir = session_root / "M_unlearned_gd"
+    # Fallback to local checkpoints root if M_full is not under session subfolder
+    if not is_checkpoint_valid(m_full_dir) and is_checkpoint_valid(Path("./checkpoints/m_full_finetuned")):
+        m_full_dir = Path("./checkpoints/m_full_finetuned").resolve()
+
+    m_unlearned_dir = session_root / "m_unlearned_gd"
 
     if not is_checkpoint_valid(m_full_dir):
         raise FileNotFoundError(
@@ -111,28 +120,14 @@ def main():
     model, tokenizer = load_checkpoint(m_full_dir, device)
 
     # Load and partition TOFU identically
-    forget_raw = load_dataset("locuslab/TOFU", "forget05")["train"]
-    retain_full_raw = load_dataset("locuslab/TOFU", "retain95")["train"]
-
-    random.seed(42)
-    all_190_authors = list(range(190))
-    random.shuffle(all_190_authors)
-
-    sampled_retain_authors = sorted(all_190_authors[:20])
-    sampled_dnt_authors = sorted(all_190_authors[20:30])
-
-    def get_row_indices(author_ids):
-        indices = []
-        for a_id in author_ids:
-            indices.extend(range(a_id * 20, a_id * 20 + 20))
-        return indices
-
-    retain_raw = retain_full_raw.select(get_row_indices(sampled_retain_authors))
-    do_not_train_raw = retain_full_raw.select(get_row_indices(sampled_dnt_authors))
-
-    forget_loader = DataLoader(TOFUDataset(forget_raw, tokenizer), batch_size=4, shuffle=True)
-    retain_loader = DataLoader(TOFUDataset(retain_raw, tokenizer), batch_size=4, shuffle=True)
-    dnt_loader = DataLoader(TOFUDataset(do_not_train_raw, tokenizer), batch_size=4, shuffle=False)
+    (
+        forget_loader,
+        retain_loader,
+        dnt_loader,
+        forget_raw,
+        retain_raw,
+        do_not_train_raw,
+    ) = get_standardized_splits(tokenizer, seed=42, batch_size=4)
 
     # Pre-unlearning evaluation
     f_pre = evaluate_loss(model, forget_loader, device)
@@ -172,11 +167,11 @@ def main():
     print("=" * 95)
     print(f"{'Split / Metric':<32} | {'Before':<10} | {'After':<10} | {'Delta':<10} | {'Reference / Role':<20}")
     print("-" * 95)
-    print(f"{'Forget 5% Loss':<32} | {f_pre:<10.4f} | {f_post:<10.4f} | {f_post - f_pre:<+10.4f} | Target to Unlearn")
-    print(f"{'Forget 5% Perplexity':<32} | {math.exp(min(f_pre, 20.0)):<10.2f} | {math.exp(min(f_post, 20.0)):<10.2f} | {math.exp(min(f_post, 20.0)) - math.exp(min(f_pre, 20.0)):<+10.2f} | Target to Unlearn")
-    print(f"{'Retain Loss':<32} | {r_pre:<10.4f} | {r_post:<10.4f} | {r_post - r_pre:<+10.4f} | Retained Knowledge")
-    print(f"{'Retain Perplexity':<32} | {math.exp(min(r_pre, 20.0)):<10.2f} | {math.exp(min(r_post, 20.0)):<10.2f} | {math.exp(min(r_post, 20.0)) - math.exp(min(r_pre, 20.0)):<+10.2f} | Retained Knowledge")
-    print(f"{'Do-Not-Train Loss (Control)':<32} | {d_pre:<10.4f} | {d_post:<10.4f} | {d_post - d_pre:<+10.4f} | GOLD CONTROL (Never Seen)")
+    print(f"{'Forget 10% Loss':<32} | {f_pre:<10.4f} | {f_post:<10.4f} | {f_post - f_pre:<+10.4f} | Target to Unlearn")
+    print(f"{'Forget 10% Perplexity':<32} | {math.exp(min(f_pre, 20.0)):<10.2f} | {math.exp(min(f_post, 20.0)):<10.2f} | {math.exp(min(f_post, 20.0)) - math.exp(min(f_pre, 20.0)):<+10.2f} | Target to Unlearn")
+    print(f"{'Retain 85% Loss':<32} | {r_pre:<10.4f} | {r_post:<10.4f} | {r_post - r_pre:<+10.4f} | Retained Knowledge")
+    print(f"{'Retain 85% Perplexity':<32} | {math.exp(min(r_pre, 20.0)):<10.2f} | {math.exp(min(r_post, 20.0)):<10.2f} | {math.exp(min(r_post, 20.0)) - math.exp(min(r_pre, 20.0)):<+10.2f} | Retained Knowledge")
+    print(f"{'Do-Not-Train 5% Loss (Control)':<32} | {d_pre:<10.4f} | {d_post:<10.4f} | {d_post - d_pre:<+10.4f} | GOLD CONTROL (Never Seen)")
     print("-" * 95)
     print(f"Loss Gap to Unseen Control (|Forget - DoNotTrain|):")
     print(f"   * Before Unlearning : {gap_before:.4f}")
