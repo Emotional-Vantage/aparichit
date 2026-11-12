@@ -1,6 +1,12 @@
+import os
 import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Dict, Any, List, Optional, Tuple
+
+# Enable offline fallback for Hugging Face datasets and models if cache exists
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 from datasets import load_dataset
 from transformers import PreTrainedTokenizer
 
@@ -135,3 +141,50 @@ def load_tofu_data(
         retain_full_raw,
         untrained_raw,
     )
+
+
+def get_standardized_splits(
+    tokenizer: PreTrainedTokenizer,
+    seed: int = 42,
+    batch_size: int = 4,
+    max_length: int = 128,
+) -> Tuple[DataLoader, DataLoader, DataLoader, Any, Any, Any]:
+    """
+    Standardized TOFU experimental split protocol across Aparichit:
+      - 10 Forget Authors (200 QA pairs from forget05)
+      - 20 Retain Authors (400 QA pairs from retain95, sampled deterministically)
+      - 10 Unseen Control Authors (200 QA pairs from retain95, holdout never trained)
+    """
+    import random
+
+    forget_raw = load_dataset("locuslab/TOFU", "forget05")["train"]
+    retain_full_raw = load_dataset("locuslab/TOFU", "retain95")["train"]
+
+    rng = random.Random(seed)
+    all_190_authors = list(range(190))
+    rng.shuffle(all_190_authors)
+
+    sampled_retain = sorted(all_190_authors[:20])
+    sampled_unseen = sorted(all_190_authors[20:30])
+
+    def get_indices(author_ids):
+        idx_list = []
+        for a_id in author_ids:
+            idx_list.extend(range(a_id * 20, a_id * 20 + 20))
+        return idx_list
+
+    retain_raw = retain_full_raw.select(get_indices(sampled_retain))
+    unseen_raw = retain_full_raw.select(get_indices(sampled_unseen))
+
+    collate_fn = get_collate_fn(tokenizer)
+
+    forget_dataset = TOFUDataset(forget_raw, tokenizer, max_length=max_length)
+    retain_dataset = TOFUDataset(retain_raw, tokenizer, max_length=max_length)
+    unseen_dataset = TOFUDataset(unseen_raw, tokenizer, max_length=max_length)
+
+    forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+    retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+    unseen_loader = DataLoader(unseen_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
+    return forget_loader, retain_loader, unseen_loader, forget_raw, retain_raw, unseen_raw
+

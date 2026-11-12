@@ -18,4 +18,9 @@ setup(
         "tqdm>=4.66.0",
         "pyyaml>=6.0",
     ],
+    entry_points={
+        "console_scripts": [
+            "aparichit=unlearn_ai.cli:main",
+        ],
+    },
 )
