@@ -17,9 +17,8 @@
 6. [Project file structure](#6-project-file-structure)
 7. [Getting started](#7-getting-started)
 8. [Results & Benchmark Leaderboard](#8-results--benchmark-leaderboard)
-9. [Scope tiers](#9-scope-tiers)
-10. [Limitations](#10-limitations)
-11. [References](#11-references)
+9. [Limitations](#9-limitations)
+10. [References](#10-references)
 
 ---
 
@@ -82,13 +81,13 @@ Four primary unlearning algorithm families are evaluated:
 
 Every unlearned model is compared against `M_retain`.
 
-| Layer | Metrics | Origin |
-|-------|---------|--------|
-| **Primary** | Probability, ROUGE-L, Truth Ratio, Model Utility, Forget Quality (KS test) | TOFU |
-| **Supplementary** | Loss-threshold Membership Inference Attack (AUC) with held-out non-member control | Ours |
-| **Supplementary** | Perplexity on forget set, retain set, and general English | Ours |
-| **Supplementary** | LLM-as-a-judge with 4 labels: `MEMORIZED`, `GIBBERISH`, `GENERIC/INVENTED`, `REFUSAL` (about 50 responses manually checked) | Ours |
-| **Cost** | Wall-clock time and memory per method | Ours |
+| Layer | Metrics | Origin / Scientific Literature |
+|-------|---------|--------------------------------|
+| **Primary (Task & Erasure)** | Probability, ROUGE-L, Truth Ratio, Model Utility, Forget Quality (Two-sample KS test) | Adapted from TOFU (Maini et al., 2024) |
+| **Privacy & Adversarial Risk** | Loss-Threshold & Min-k% Prob Membership Inference Attack (ROC-AUC) against 5% holdout control | Adapted from Yeom et al. (IEEE S&P 2018); Carlini et al. (IEEE S&P 2022); Shi et al. (ICLR 2024) |
+| **Linguistic Fluency** | Cross-Entropy Loss & Perplexity on Forget, Retain, and General English splits | Adapted from Yao et al. (2023); Maini et al. (2024) |
+| **Qualitative Inspection** | LLM-as-a-judge (4 labels: `MEMORIZED`, `GIBBERISH`, `GENERIC/INVENTED`, `REFUSAL`) & prompt-output alignment | Adapted from Zheng et al. (NeurIPS 2023); Eldan & Russinovich (2023) |
+| **Computational Efficiency** | Empirical wall-clock execution time (seconds) and GPU memory footprint | Adapted from Ilharco et al. (ICLR 2023) |
 
 
 ## 6. Project file structure
@@ -147,7 +146,6 @@ Aparichit/
 ├── run_unlearning_fisher.py          # Method 2: Fisher Information Masking Runner
 ├── run_unlearning_tv.py              # Method 3: Task Vector Negation + TIES Runner
 ├── run_unlearning_generic.py         # Method 4: Generic-Label Fine-Tuning Runner
-├── run_local.py                      # Interactive terminal menu workflow runner
 ├── requirements.txt                  # Python dependencies
 └── setup.py                          # Makes package installable (`pip install -e .`)
 ```
@@ -159,7 +157,6 @@ Aparichit/
 | `unlearn_ai/` | Core library: data, algorithms, evaluation, auditing, and CLI |
 | `run_unlearning_*.py` | Direct standalone runners for individual unlearning methods |
 | `train_model.py` | Trains $M_{\text{base}}$ and $M_{\text{full}}$ on the 85/10 split |
-| `run_local.py` | Interactive terminal interface to train, unlearn, and evaluate |
 | `outputs/` | Visualizations (`.svg`), leaderboard (`.md`/`.csv`), and benchmark results (`.json`) |
 | `checkpoints/` | Model weights for $M_{\text{full}}$ and all unlearned models |
 | `tests/` | Automated unit test suite verifying splits, metrics, auditing, and UI |
@@ -237,17 +234,7 @@ Generated vector SVG charts are available in `outputs/`:
 - **Privacy vs. Utility Tradeoff:** [`outputs/privacy_utility_tradeoff.svg`](file:///home/sridhar_1906/Documents/TAI_PROJECT/outputs/privacy_utility_tradeoff.svg)
 - **Cross-Entropy Loss Distributions:** [`outputs/loss_distributions.svg`](file:///home/sridhar_1906/Documents/TAI_PROJECT/outputs/loss_distributions.svg)
 
-## 9. Scope tiers
-
-| Tier | Contents | Status |
-|------|----------|:------:|
-| **Minimum viable** | GPT-2 Small, 85/10/5 split (`forget10`), `M_base` / `M_full`, GD (Gradient Difference), Task Vector, TOFU metrics + perplexity, Pareto plot and table | **Completed** |
-| **Recommended** | MVP + Fisher + Generic-label FT, loss-based MIA with held-out 5% control, cost table | **Completed** |
-| **Production Product**| Unified CLI (`aparichit`), SVG Pareto Frontier & Privacy plots, Interactive HTML Dashboard, full automated unit test suite | **Completed** |
-
-If time runs short, cut the wrappers (CLI, PDF report), not the retain model or the evaluation.
-
-## 10. Limitations
+## 9. Limitations
 
 - **Approximate, not certified.** No method here gives a formal guarantee.
 - **Small model, one benchmark.** Results may not transfer to larger models or real pretraining data.
@@ -257,12 +244,17 @@ If time runs short, cut the wrappers (CLI, PDF report), not the retain model or 
 - **Metric limits.** MIA and perplexity are weak alone, Forget Quality can be high for a broken model, and the LLM judge is imperfect.
 - **No legal claim.** This project does not provide GDPR or any other compliance.
 
-## 11. References
+## 10. References
 
 - Maini, Feng, Schwarzschild, Lipton, Kolter. *TOFU: A Task of Fictitious Unlearning for LLMs.* 2024.
 - Golatkar, Achille, Soatto. *Eternal Sunshine of the Spotless Net: Selective Forgetting in Deep Networks.* CVPR 2020.
 - Ilharco et al. *Editing Models with Task Arithmetic.* ICLR 2023.
 - Eldan, Russinovich. *Who's Harry Potter? Approximate Unlearning in LLMs.* 2023.
+- Yeom, Giacomelli, Fredrikson, Jha. *Privacy Risk in Machine Learning: Analyzing the Connection to Overfitting.* IEEE S&P 2018.
+- Carlini, Chien, Nasr, Song, Terzis, Tramer. *Membership Inference Attacks From First Principles.* IEEE S&P 2022.
+- Shi et al. *Detecting Pretraining Data from Large Language Models.* ICLR 2024.
+- Zheng et al. *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena.* NeurIPS 2023.
+- Yao et al. *Large Language Model Unlearning via Preference Optimization.* 2023.
 - Cao, Yang. *Towards Making Systems Forget with Machine Unlearning.* IEEE S&P 2015.
 - Ginart, Guan, Valiant, Zou. *Making AI Forget You: Data Deletion in Machine Learning.* NeurIPS 2019.
 - Neel, Roth, Sharifi-Malvajerdi. *Descent-to-Delete: Gradient-Based Methods for Machine Unlearning.* ALT 2021.
