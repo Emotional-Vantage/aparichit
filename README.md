@@ -15,12 +15,11 @@
 4. [Unlearning methods compared](#4-unlearning-methods-compared)
 5. [How results are evaluated](#5-how-results-are-evaluated)
 6. [Project file structure](#6-project-file-structure)
-7. [Workflow: VS Code, GitHub, Colab, Drive](#7-workflow-vs-code-github-colab-drive)
-8. [Getting started](#8-getting-started)
-9. [Results](#9-results)
-10. [Scope tiers](#10-scope-tiers)
-11. [Limitations](#11-limitations)
-12. [References](#12-references)
+7. [Getting started](#7-getting-started)
+8. [Results](#8-results)
+9. [Scope tiers](#9-scope-tiers)
+10. [Limitations](#10-limitations)
+11. [References](#11-references)
 
 ---
 
@@ -69,15 +68,14 @@ Success is always measured **relative to a retain-only reference model** (a mode
 
 Four method families, five runs (Gradient Ascent has two variants).
 
-| Run | Idea | Source | Status |
-|-----|------|--------|--------|
-| **GA** (Gradient Ascent) | Maximize loss on the forget set | TOFU | Paper baseline |
-| **GD** (Gradient Difference) | GA on forget set + normal loss on retain set | TOFU | Paper baseline |
-| **Fisher forgetting** | Add noise to weights, scaled inversely to their importance (Fisher information) for the retain set | Golatkar et al., 2020 | Adapted from image models to GPT-2 |
-| **Task vector negation** | Build a vector from a forget-only fine-tune and subtract it from `M_full` with TIES trimming | Ilharco et al., 2023; Yadav et al., 2023 | Implemented (`run_unlearning_tv.py`) |
-| **Generic-label fine-tuning** | Fine-tune toward what a model that never saw the target would predict ("reinforcement bootstrapping") | Eldan & Russinovich, 2023 | Implemented (`run_unlearning_generic.py`) |
+| Run | Idea | Source |
+|-----|------|--------|
+| **GA** (Gradient Ascent) | Maximize loss on the forget set | TOFU |
+| **GD** (Gradient Difference) | GA on forget set + normal loss on retain set | TOFU |
+| **Fisher forgetting** | Add noise to weights, scaled inversely to their importance (Fisher information) for the retain set | Golatkar et al., 2020 |
+| **Task vector negation** | Build a vector from a forget-only fine-tune and subtract it from `M_full` with TIES trimming | Ilharco et al., 2023; Yadav et al., 2023 |
+| **Generic-label fine-tuning** | Fine-tune toward what a model that never saw the target would predict ("reinforcement bootstrapping") | Eldan & Russinovich, 2023 |
 
-Everything adapted is labelled as adapted. None of these methods was evaluated by its authors on GPT-2 with TOFU.
 
 ## 5. How results are evaluated
 
@@ -91,7 +89,6 @@ Every unlearned model is compared against `M_retain`.
 | **Supplementary** | LLM-as-a-judge with 4 labels: `MEMORIZED`, `GIBBERISH`, `GENERIC/INVENTED`, `REFUSAL` (about 50 responses manually checked) | Ours |
 | **Cost** | Wall-clock time and memory per method | Ours |
 
-Results are read on the **Forget Quality vs Model Utility** plane, using epoch-wise checkpoints. No single metric is treated as proof of forgetting.
 
 ## 6. Project file structure
 
@@ -188,27 +185,7 @@ Aparichit/
 | `checkpoints/` | Heavy model weights, kept on Drive, never in Git |
 | `tests/` | Quick correctness checks, run on every push |
 
-## 7. Workflow: VS Code, GitHub, Colab, Drive
-
-```
-VS Code (write code) → git push → GitHub → git pull in Colab → train → save to Drive
-```
-
-| Tool | Role |
-|------|------|
-| **VS Code** | Write and test code locally (`quick_test.yaml` runs on CPU) |
-| **GitHub** | Source of truth for code, configs, splits, small results |
-| **Google Colab** | GPU for training and unlearning runs |
-| **Google Drive** | Stores model checkpoints so they survive Colab disconnects |
-
-Rules:
-
-- Checkpoints go to Drive via the `UNLEARN_CKPT_DIR` environment variable, never into Git.
-- Keep notebooks thin and logic in `unlearn_ai/`, so almost all edits happen in VS Code.
-- Fix seeds and commit the split files for reproducibility.
-- Keep API keys (for the LLM judge) in Colab Secrets or a local `.env`, never in the repo.
-
-## 8. Getting started
+## 7. Getting started
 
 **Local (VS Code):**
 
@@ -248,7 +225,7 @@ os.makedirs(os.environ["UNLEARN_CKPT_DIR"], exist_ok=True)
 
 Switch the runtime to a GPU (Runtime → Change runtime type) before running.
 
-## 9. Results & Benchmark Leaderboard
+## 8. Results & Benchmark Leaderboard
 
 The table below presents the standardized benchmark results across the four evaluated algorithms on the TOFU benchmark (`forget05`, GPT-2 Small, Seed 42). All evaluations were executed with the standardized [`aparichit benchmark`](file:///home/sridhar_1906/Documents/TAI_PROJECT/unlearn_ai/benchmark/compare_all.py) suite:
 
@@ -271,7 +248,7 @@ Generated vector SVG charts are available in `outputs/`:
 - **Privacy vs. Utility Tradeoff:** [`outputs/privacy_utility_tradeoff.svg`](file:///home/sridhar_1906/Documents/TAI_PROJECT/outputs/privacy_utility_tradeoff.svg)
 - **Cross-Entropy Loss Distributions:** [`outputs/loss_distributions.svg`](file:///home/sridhar_1906/Documents/TAI_PROJECT/outputs/loss_distributions.svg)
 
-## 10. Scope tiers
+## 9. Scope tiers
 
 | Tier | Contents |
 |------|----------|
@@ -281,7 +258,7 @@ Generated vector SVG charts are available in `outputs/`:
 
 If time runs short, cut the wrappers (CLI, PDF report), not the retain model or the evaluation.
 
-## 11. Limitations
+## 10. Limitations
 
 - **Approximate, not certified.** No method here gives a formal guarantee.
 - **Small model, one benchmark.** Results may not transfer to larger models or real pretraining data.
@@ -291,7 +268,7 @@ If time runs short, cut the wrappers (CLI, PDF report), not the retain model or 
 - **Metric limits.** MIA and perplexity are weak alone, Forget Quality can be high for a broken model, and the LLM judge is imperfect.
 - **No legal claim.** This project does not provide GDPR or any other compliance.
 
-## 12. References
+## 11. References
 
 - Maini, Feng, Schwarzschild, Lipton, Kolter. *TOFU: A Task of Fictitious Unlearning for LLMs.* 2024.
 - Golatkar, Achille, Soatto. *Eternal Sunshine of the Spotless Net: Selective Forgetting in Deep Networks.* CVPR 2020.
