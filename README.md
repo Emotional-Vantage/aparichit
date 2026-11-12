@@ -45,7 +45,6 @@ Success is always measured **relative to a retain-only reference model** (a mode
 | An analysis of the forgetting-vs-utility trade-off, including how each method fails | A proof or certificate that data is erased |
 | A Trustworthy AI study of *evaluating* deletion behaviour | A system that provides legal (GDPR etc.) compliance |
 
-Wording rule: the project is *relevant to* deletion requests. It does not claim compliance.
 
 ## 3. Dataset and models
 
