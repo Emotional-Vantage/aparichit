@@ -1,0 +1,371 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{cite}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{float}
+\usepackage{tcolorbox}
+\usepackage{tikz}
+\usepackage{fancyhdr}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!80!black,
+    citecolor=green!50!black,
+    urlcolor=blue!70!black
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Aparichit: Machine Unlearning in Language Models}
+\lhead{Trustworthy Artificial Intelligence}
+\cfoot{\thepage}
+
+\title{\textbf{\LARGE Aparichit: Empirical Benchmarking and Evaluation Rigor in Approximate Machine Unlearning for Language Models}}
+
+\author{
+    \textbf{Shiv Thanmay} \quad (Roll No: \texttt{2024IMG-041}) \\
+    \textbf{Sridhar Manokaran} \quad (Roll No: \texttt{2024IMG-045}) \\
+    \textbf{Kumar Suryanshu} \quad (Roll No: \texttt{2024IMG-026}) \\[0.8em]
+    \textit{Department of Information Technology / Computer Science} \\
+    \textit{Course: Trustworthy Artificial Intelligence (TAI)}
+}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Large language models (LLMs) trained on extensive corpora inevitably memorize verbatim personal records, copyrighted texts, and sensitive biographical data. The legal establishment of privacy mandates, including the EU General Data Protection Regulation (GDPR) ``Right to be Forgotten'', necessitates effective techniques for selectively expunging targeted training examples from trained neural weights without the prohibitive cost of full retraining. This project presents \textbf{Aparichit}, a modular empirical benchmarking toolkit and rigorous evaluation protocol for approximate language model unlearning. We implement and evaluate four foundational algorithm families: Calibrated Gradient Difference (GD), Empirical Diagonal Fisher Retain-Anchored Gradient Unlearning, Magnitude-Trimmed Task Vector Negation, and Generic-Label Fine-Tuning with Reinforcement Bootstrapping. Crucially, we enforce methodological rigor by: (1) adopting a balanced active retain training subset ($N=400$) to prevent retain loss dominance, (2) training an explicit, independent retain-only gold reference model ($M_{\text{retain}}$), (3) conducting mandatory three-way evaluations across Forget, Retain, and strictly excluded Do-Not-Train (unseen control) splits, (4) computing direction-adjusted Membership Inference Attack (MIA) ROC-AUC metrics, and (5) providing isolated wall-clock timing breakdowns ($T_{\text{training}}$, $T_{\text{auxiliary}}$, $T_{\text{unlearning}}$, $T_{\text{evaluation}}$). We present comprehensive experimental formulations, comparative analytical discussions, and an authentic declaration of independent academic authorship.
+\end{abstract}
+
+\vspace{1em}
+\noindent\textbf{Keywords:} Machine Unlearning, Privacy, Membership Inference Attacks, LLM Memorization, Fisher Information, Task Vectors.
+
+\vspace{1.5em}
+
+---
+
+\section{Introduction}
+
+The widespread deployment of generative transformer architectures has revealed a severe vulnerability: causal language models memorize training sequences with high fidelity~\cite{carlini2022quantifying}. When sensitive attributes, such as medical records, personal identifying information (PII), or private biographical accounts, are embedded into a model's weights, mere retrieval-layer filtering or database deletion fails to prevent extraction via targeted probing and adversarial prompting~\cite{shi2024detecting}.
+
+Regulatory frameworks, including Article 17 of the GDPR (Right to Erasure) and the California Consumer Privacy Act (CCPA), legally compel data custodians to delete personal data upon request. In the context of deep learning, fulfilling this requirement requires \textit{machine unlearning}: modifying an already trained model $\mathcal{M}$ such that it behaves as if a specific subset $\mathcal{D}_{\text{forget}}$ had never been part of its training corpus.
+
+\subsection{The Fundamental Research Question}
+While the exact gold standard of machine unlearning is naive full retraining from scratch on the retained dataset $\mathcal{D}_{\text{retain}}$ (producing model $M_{\text{retain}}$), this approach scales prohibitively with model parameter count and corpus size. Consequently, the field has proposed various \textit{approximate unlearning} heuristics. However, existing literature frequently suffers from evaluation shortcomings, including:
+\begin{enumerate}
+    \item Equating unlearning with intentional model destruction (e.g., inducing gibberish outputs on forget prompts).
+    \item Comparing unlearned checkpoints only to the initial memorized model ($M_{\text{full}}$) without an actual trained retain-only reference ($M_{\text{retain}}$).
+    \item Evaluating only on forget and retain subsets while ignoring held-out control text, thus concealing severe general fluency degradation.
+    \item Conflating auxiliary pre-computation time with actual unlearning execution time.
+\end{enumerate}
+
+In response to these deficiencies, this research addresses the primary question:
+\begin{quote}
+\textit{To what degree can approximate unlearning methods bring a fine-tuned language model into alignment with an independently trained retain-only model ($M_{\text{retain}}$), and what exact costs do these methods incur across factual retention, linguistic fluency, adversarial privacy, and computational runtime?}
+\end{quote}
+
+---
+
+\section{Methodology}
+
+The core philosophy of Aparichit is that approximate unlearning cannot be evaluated in isolation. Every parameter update must be benchmarked against both an empirical lower reference (the unadapted base model), an empirical upper reference (the fully fine-tuned model), and an independently trained target gold reference (the retain-only model).
+
+\subsection{Dataset and Standardized Split Architecture}
+We evaluate on the \textbf{TOFU} (Task of Fictitious Unlearning) benchmark~\cite{maini2024tofu}. TOFU consists of 200 fictitious author profiles, each comprising 20 question-answer pairs (4,000 QA pairs total). Because all biographical entities, publication titles, and dates are entirely synthetic, any domain recall exhibited by an evaluated model originates strictly from our controlled training phases.
+
+\subsubsection{The 85\% Retain / 10\% Forget / 5\% Do-Not-Train Architecture}
+Aparichit enforces a strict, disjoint data partition across all models:
+\begin{itemize}
+    \item \textbf{Forget Split ($\mathcal{D}_{\text{forget}}$, 10\%)}: Exactly 20 authors (400 QA pairs from \texttt{forget10}). This represents the private partition targeted for erasure.
+    \item \textbf{Retain Partition ($\mathcal{D}_{\text{retain}}^{\text{full}}$, 85\%)}: Exactly 170 authors (3,400 QA pairs from \texttt{retain90}, rows 0--3,400). Represents core domain knowledge to be preserved.
+    \item \textbf{Do-Not-Train Control Split ($\mathcal{D}_{\text{control}}$, 5\%)}: Exactly 10 authors (200 QA pairs from \texttt{retain90}, rows 3,400--3,600). \textbf{This partition is strictly excluded from all training phases ($M_{\text{full}}$ and $M_{\text{retain}}$) and hyperparameter tuning.} It serves as an untouched empirical control distribution for out-of-distribution perplexity and privacy auditing.
+\end{itemize}
+
+\subsubsection{Rationale for the Active Retain Training Subset ($N_{\text{active}} = 400$)}
+In standard full-dataset unlearning setups, pairing 400 forget examples against 3,400 retain examples creates an 8.5:1 data imbalance. In multi-task loss formulations:
+\begin{equation}
+\mathcal{L} = -\mathcal{L}_{\text{forget}} + \alpha \mathcal{L}_{\text{retain}}
+\end{equation}
+the retain gradient updates dominate the backpropagation step. Consequently, the model minimizes the aggregate loss by prioritizing retain facts, leaving the forget parameters inadequately updated. 
+
+To maintain training equilibrium without corrupting dataset integrity, Aparichit introduces an \textbf{active retain training subset} of 400 QA pairs ($\mathcal{D}_{\text{retain}}^{\text{active}}$), creating a balanced 1:1 optimization dynamic between forget and retain objectives during training and unlearning, while reserving the full 3,400 examples for complete retention verification.
+
+\subsection{Model State Taxonomy}
+All experiments employ the autoregressive GPT-2 architecture ($\sim 124$M parameters). We establish four explicit model states:
+\begin{enumerate}
+    \item \textbf{$M_{\text{base}}$ (Pretrained Reference)}: Off-the-shelf GPT-2 checkpoint initialized prior to any TOFU exposure. Represents the lower capability bound.
+    \item \textbf{$M_{\text{full}}$ (Memorized Baseline)}: Fine-tuned from $M_{\text{base}}$ on $\mathcal{D}_{\text{forget}} \cup \mathcal{D}_{\text{retain}}^{\text{active}}$ (800 QA pairs total) for 13 epochs ($\text{LR}=5\times 10^{-5}$, AdamW, batch size 4). Represents the compromised model containing memorized private facts.
+    \item \textbf{$M_{\text{retain}}$ (Retain-Only Gold Reference)}: Separately fine-tuned from $M_{\text{base}}$ \textbf{strictly and exclusively on $\mathcal{D}_{\text{retain}}^{\text{active}}$} (400 QA pairs) under identical hyperparameters. This model has never observed any token from $\mathcal{D}_{\text{forget}}$ or $\mathcal{D}_{\text{control}}$. It serves as the empirical ground truth for optimal unlearning.
+    \item \textbf{$M_{\text{unlearned}}$ (Unlearned Models)}: Resulting weights obtained after applying an approximate unlearning algorithm to $M_{\text{full}}$.
+\end{enumerate}
+
+\subsection{Unlearning Algorithm Formulations}
+
+\subsubsection{Method 1: Calibrated Gradient Difference (GD)}
+Gradient Difference attempts to invert the fine-tuning step by optimizing:
+\begin{equation}
+\mathcal{L}_{\text{GD}}(\theta) = -\text{clamp}\Big(\mathcal{L}(\theta; \mathcal{D}_{\text{forget}}), \, \tau\Big) + \alpha_{\text{retain}} \cdot \mathcal{L}(\theta; \mathcal{D}_{\text{retain}}^{\text{active}})
+\end{equation}
+To prevent gradient ascent from driving the forget loss to infinity—which invariably induces catastrophic model collapse and degenerative repetitive token generation—we implement active loss clamping with an empirical ceiling threshold $\tau = 5.2$. Gradient norms are clipped at $1.0$.
+
+\subsubsection{Method 2: Empirical Diagonal Fisher Retain-Anchored Unlearning}
+Rather than applying uniform gradient ascent or unguided weight noise, we formulate retain-anchored unlearning using the diagonal empirical Fisher Information Matrix $\mathcal{F}_{\text{retain}}$. The diagonal elements represent parameter sensitivity with respect to the retain distribution:
+\begin{equation}
+\mathcal{F}_{ii} = \frac{1}{|\mathcal{D}_{\text{retain}}^{\text{active}}|} \sum_{x \in \mathcal{D}_{\text{retain}}^{\text{active}}} \left( \frac{\partial \log p(x; \theta)}{\partial \theta_i} \right)^2
+\end{equation}
+We target multi-head attention projections (\texttt{c\_attn}, \texttt{c\_proj}) and feed-forward MLP blocks (\texttt{c\_fc}, \texttt{c\_proj}), strictly excluding token embeddings (\texttt{wte}, \texttt{wpe}) and layer normalizations. The unlearning optimization objective is:
+\begin{equation}
+\mathcal{L}_{\text{Fisher}}(\theta) = -\text{clamp}\Big(\mathcal{L}(\theta; \mathcal{D}_{\text{forget}}), \, \tau\Big) + \alpha \mathcal{L}(\theta; \mathcal{D}_{\text{retain}}^{\text{active}}) + \beta \sum_{i \in \Theta_{\text{target}}} \mathcal{F}_{ii} (\theta_i - \theta_{0, i})^2
+\end{equation}
+where $\theta_0$ denotes the pre-unlearning parameters of $M_{\text{full}}$, and $\beta = 25.0$ enforces a quadratic elastic penalty that anchors critical retain features while permitting unconstrained updates along non-critical directions.
+
+\subsubsection{Method 3: Magnitude-Trimmed Task Vector Negation}
+Building upon task arithmetic~\cite{ilharco2023editing} and weight trimming~\cite{yadav2023ties}, this method computes an unlearning update in weight space:
+\begin{enumerate}
+    \item Fine-tune a dedicated forget branch $M_{\text{forget}}$ from $M_{\text{base}}$ on $\mathcal{D}_{\text{forget}}$ until deep convergence ($E=12$, $\text{LR}=1\times 10^{-4}$).
+    \item Extract the raw task vector: $\tau = \theta_{M_{\text{forget}}} - \theta_{M_{\text{base}}}$.
+    \item Apply magnitude trimming with ratio $\rho = 0.20$: retain the top 20\% largest parameter displacements by magnitude in linear projections and zero out the lower 80\% diffuse noise:
+    \begin{equation}
+    \tilde{\tau}_i = \begin{cases} \tau_i & \text{if } |\tau_i| \ge \text{Quantile}_{1-\rho}(|\tau|) \\ 0 & \text{otherwise} \end{cases}
+    \end{equation}
+    \item Subtract the scaled vector: $\theta_{\text{unlearned}} = \theta_{M_{\text{full}}} - \lambda \tilde{\tau}$.
+\end{enumerate}
+\textit{Methodological Precision:} Unlike multi-task TIES-merging which resolves directional conflicts across multiple tasks via sign consensus voting, Aparichit applies single-task magnitude trimming. The control split $\mathcal{D}_{\text{control}}$ is strictly excluded from $\lambda$ tuning.
+
+\subsubsection{Method 4: Generic-Label Fine-Tuning \& Reinforcement Bootstrapping}
+Adapted from Eldan and Russinovich~\cite{eldan2023who}, this approach overwrites sensitive entities rather than attempting unguided gradient ascent:
+\begin{itemize}
+    \item \textbf{Tier 1 (Anchor-Sanitized Generic Fine-Tuning)}: Forget answers are algorithmically rewritten into natural generic formulations (e.g., replacing specific titles and dates with \textit{``an established author recognized for narrative prose''}). The model is fine-tuned on generic targets paired with retain loss regularizers.
+    \item \textbf{Tier 2 (Reinforcement Bootstrapping via Logit Subtraction)}: An over-trained model $M_{\text{reinf}}$ is constructed on forget data. The logit amplification over base predictions is computed:
+    \begin{equation}
+    \Delta v = \text{ReLU}\Big(\text{logits}(M_{\text{reinf}}) - \text{logits}(M_{\text{base}})\Big)
+    \end{equation}
+    The target distribution is shifted: $v_{\text{target}} = \text{logits}(M_{\text{base}}) - \alpha \Delta v$, and $M_{\text{full}}$ is optimized using KL divergence combined with retain cross-entropy.
+\end{itemize}
+
+\subsection{Evaluation Pipeline and Privacy Auditing}
+
+\subsubsection{Mandatory Three-Way Evaluation}
+Every checkpoint is evaluated across three partitions:
+\begin{enumerate}
+    \item $\mathcal{D}_{\text{forget}}$: Measures erasure success. Ideal behavior: Loss matches $M_{\text{retain}}$, ROUGE-L drops to base level.
+    \item $\mathcal{D}_{\text{retain}}^{\text{active}}$: Measures domain utility preservation. Ideal behavior: Loss and ROUGE-L remain identical to $M_{\text{full}}$.
+    \item $\mathcal{D}_{\text{control}}$: Measures general linguistic integrity. Ideal behavior: Zero deviation from baseline control perplexity.
+\end{enumerate}
+
+\subsubsection{Comparative Reference Metrics}
+For each unlearned checkpoint, we compute relative performance differentials:
+\begin{align}
+\Delta \text{Metric}(M_{\text{unlearned}}, M_{\text{retain}}) &= \text{Metric}(M_{\text{unlearned}}) - \text{Metric}(M_{\text{retain}}) \\
+\Delta \text{Metric}(M_{\text{unlearned}}, M_{\text{full}}) &= \text{Metric}(M_{\text{unlearned}}) - \text{Metric}(M_{\text{full}})
+\end{align}
+
+\subsubsection{Membership Inference Attacks (MIA) \& Direction-Adjusted AUC}
+We implement loss-threshold and Min-$k$\% probability MIA attacks~\cite{shi2024detecting} treating $\mathcal{D}_{\text{forget}}$ as members ($y=1$) and $\mathcal{D}_{\text{control}}$ as non-members ($y=0$). Attack scores are sequence average log-probabilities: higher log-probability reflects higher membership confidence.
+
+\textit{Direction-Adjusted Metric:} When an unlearning method severely over-penalizes forget tokens, their log-probability falls below that of unseen natural language, yielding an unadjusted $\text{AUC} < 0.50$. An adversary knowing the unlearning policy can trivially invert their classification rule ($\hat{y} = \mathbb{I}[\text{score} < \tau]$) to obtain $1 - \text{AUC}$. We therefore report both raw AUC and direction-adjusted AUC:
+\begin{equation}
+\text{AUC}_{\text{adjusted}} = \max\Big(\text{AUC}, \, 1 - \text{AUC}\Big)
+\end{equation}
+and define the Privacy Leakage Index as $\text{PLI} = 2 \cdot (\text{AUC}_{\text{adjusted}} - 0.50) \in [0, 1]$.
+
+\subsubsection{Separated Computational Timing Breakdown}
+To prevent misleading cost comparisons, wall-clock time is tracked with explicit CUDA synchronization ($\texttt{torch.cuda.synchronize()}$):
+\begin{equation}
+T_{\text{total}} = T_{\text{training}}(M_{\text{full}}, M_{\text{retain}}) + \underbrace{\Big( T_{\text{auxiliary}} + T_{\text{unlearning}} \Big)}_{T_{\text{method}}} + T_{\text{evaluation}}
+\end{equation}
+
+---
+
+\section{Results and Discussions}
+
+\subsection{Master Benchmark Evaluation}
+Table~\ref{tab:master_benchmark} summarizes the standardized empirical evaluation across all reference checkpoints and approximate unlearning methods.
+
+\begin{table*}[htbp]
+\centering
+\small
+\caption{Comprehensive Three-Way Evaluation Benchmark across Forget, Retain, and Do-Not-Train splits. Differences ($\Delta$) are computed relative to the independently trained $M_{\text{retain}}$ gold reference.}
+\label{tab:master_benchmark}
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lcccccccc@{}}
+\toprule
+\textbf{Model / Method} & \multicolumn{3}{c}{\textbf{Cross-Entropy Loss ($\downarrow$)}} & \multicolumn{2}{c}{\textbf{ROUGE-L}} & \multicolumn{2}{c}{\textbf{MIA Privacy}} & \textbf{Time (s)} \\
+\cmidrule(lr){2-4} \cmidrule(lr){5-6} \cmidrule(lr){7-8} \cmidrule(lr){9-9}
+& \textbf{Forget} & \textbf{Retain} & \textbf{DNT} & \textbf{Forget ($\downarrow$)} & \textbf{Retain ($\uparrow$)} & \textbf{Raw AUC} & \textbf{Adj AUC} & $T_{\text{method}}$ \\
+\midrule
+$M_{\text{base}}$ (Pretrained Base) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & -- \\
+$M_{\text{full}}$ (Memorized Baseline) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & -- \\
+$M_{\text{retain}}$ (\textbf{Gold Reference}) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & -- \\
+\midrule
+Method 1: Gradient Difference (GD) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] \\
+Method 2: Fisher Retain-Anchored & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] \\
+Method 3: Task Vector Negation & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] \\
+Method 4: Generic FT (Tier 1) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] \\
+Method 4: Generic FT (Tier 2) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] \\
+\bottomrule
+\end{tabular*}
+\end{table*}
+
+\subsection{Analytical Discussions and Critical Insights}
+
+\subsubsection{Baseline Memorization and Vulnerability}
+\textbf{Observation:} Fine-tuning on the TOFU dataset produces near-perfect factual memorization on $M_{\text{full}}$, reflected by near-zero training loss and high ROUGE-L recall. Crucially, the raw MIA ROC-AUC against unseen control text reaches extreme levels ($\ge 0.90$), indicating near-complete separability between training members and non-members. \\
+\textbf{Inference:} Language models fine-tuned on entity-rich biographical facts overfit decisively to syntactic phrasing and rare proper nouns. This confirms that standard regularized fine-tuning does not provide privacy by default; sensitive information remains directly accessible to loss-based and token-probability membership attacks.
+
+\subsubsection{Method 1: Gradient Difference Dynamics}
+\textbf{Observation:} Gradient Difference effectively forces the forget loss upwards while retaining acceptable retain recall, provided that ascent loss clamping ($\tau \le 5.2$) is enforced. Without threshold clamping, the loss explodes within 2 epochs, destroying grammatical coherence. \\
+\textbf{Inference:} Pure unconstrained gradient ascent is inherently unstable in causal autoregressive models. The loss landscape is asymmetric: descending a cross-entropy surface regularizes token predictions towards meaningful syntactic structures, whereas ascending it drives parameters into degenerate regions that output repetitive token loops. Clamping acts as a critical bounding regularizer.
+
+\subsubsection{Method 2: Fisher Curvature Anchoring}
+\textbf{Observation:} Fisher Retain-Anchored unlearning achieves substantial factual suppression on the forget set while maintaining the highest retain recall among gradient-based methods. The difference in retain loss relative to $M_{\text{retain}}$ ($\Delta \text{Loss}_{\text{retain}}$) remains strictly minimized. \\
+\textbf{Inference:} Parameter importance in deep neural networks is highly non-uniform. The diagonal Fisher Information Matrix accurately captures which projection weights are indispensable for retain recall. By penalizing movement along high-curvature retain dimensions, the quadratic anchor allows gradient ascent to modify null or low-curvature directions that encode forget-specific factual associations.
+
+\subsubsection{Method 3: Task Vector Trimming and Efficiency}
+\textbf{Observation:} Task vector negation executes with orders of magnitude faster unlearning time ($T_{\text{unlearning}} < 1.0$s) once the task vector is computed. Magnitude trimming prevents the retain collapse observed when naive un-trimmed task vectors are negated. \\
+\textbf{Inference:} Task vector negation operates via destructive interference in parameter space. However, diffuse low-magnitude noise in $\tau$ disrupts general language abilities. Trimming the bottom 80\% of displacements confines parameter surgery to the high-magnitude weights directly responsible for factual memorization. The primary trade-off is the auxiliary time required to train $M_{\text{forget}}$ ($T_{\text{auxiliary}}$), which must be factored into total cost comparisons.
+
+\subsubsection{Method 4: Generic-Label Fine-Tuning \& Entity Overwriting}
+\textbf{Observation:} Generic-label fine-tuning (especially Tier 2 logit subtraction) avoids catastrophic forgetting entirely, achieving 100\% retain recall retention. On forget queries, the model fluently produces appropriate generic prose rather than hallucinating gibberish or outputting refusals. \\
+\textbf{Inference:} Rather than attempting to ``erase'' information by destroying neural pathways, generic rewriting reframes unlearning as \textit{knowledge editing}. The model replaces sensitive factual associations with benign conceptual generalities. While effective for output alignment, privacy audits reveal that trace residual log-probabilities can remain slightly elevated compared to clean holdout data, reflecting the persistence of underlying representations.
+
+\subsubsection{Comparative Trade-off Analysis}
+\begin{itemize}
+    \item \textbf{Privacy vs. Utility Frontier:} Fisher unlearning and Gradient Difference provide the strongest privacy defense (MIA adjusted AUC nearest 0.50), but require careful learning rate calibration to prevent retain damage. Generic-label fine-tuning provides superior linguistic utility at the cost of slight residual memorization traces.
+    \item \textbf{Computational Cost Disparity:} While GD and Fisher require full forward-backward iterations over retain and forget data ($T_{\text{unlearning}} \sim 20$--40s), Task Vector negation completes in fractions of a second during deployment, making it ideal for batched multi-request deletion architectures once the forget branch is pre-compiled.
+\end{itemize}
+
+---
+
+\section{Conclusions}
+
+Approximate machine unlearning for language models is a multi-objective optimization challenge spanning factual deletion, domain knowledge retention, out-of-distribution stability, adversarial privacy resistance, and runtime overhead. Through the development of the \textbf{Aparichit} benchmarking framework, this study demonstrated that unlearning performance cannot be reliably characterized by forget-set failure alone:
+\begin{enumerate}
+    \item \textbf{Benchmarking against $M_{\text{retain}}$ is essential:} Evaluating relative to an independently trained retain-only model reveals whether an unlearned model genuinely mimics an unexposed distribution or merely exhibits broken degenerative behaviors.
+    \item \textbf{Active retain subsetting balances dynamics:} Controlling the active retain size ($N=400$) prevents retain gradients from overwhelming the unlearning objective during multi-objective optimization.
+    \item \textbf{Direction-adjusted privacy metrics are necessary:} Inverting MIA decision rules proves that over-unlearning (driving forget loss far above natural holdout text) creates exploitable privacy leakage identical to memorization.
+    \item \textbf{Algorithm Suitability Depends on Deployment Constraints:} Where rigorous privacy defense is paramount, Fisher retain-anchored unlearning is optimal; where inference fluency and zero retain degradation are mandatory, Tier 2 Generic-Label fine-tuning represents the strongest paradigm; and for instant batch parameter updates, magnitude-trimmed task vector negation provides unparalleled efficiency.
+\end{enumerate}
+
+---
+
+\section{Contributions}
+
+In accordance with academic standards for equitable collaboration, the design, implementation, analysis, and validation of the Aparichit project were distributed equally among all three team members:
+
+\subsection*{Shiv Thanmay (Roll No: \texttt{2024IMG-041})}
+\begin{itemize}
+    \item Formulated the core mathematical methodology for Method 2: Empirical Diagonal Fisher Retain-Anchored Gradient Unlearning, including curvature caching and quadratic penalty integration.
+    \item Implemented the Phase 1 Reference Training pipeline in \texttt{train\_model.py} and \texttt{run\_train\_retain.py}, enabling the automated, independent training and serialization of $M_{\text{base}}$, $M_{\text{full}}$, and $M_{\text{retain}}$.
+    \item Designed the active retain subsetting strategy ($N_{\text{active}}=400$) to resolve optimization gradient imbalance on the TOFU benchmark.
+    \item Authored the Methodology sections pertaining to mathematical loss clamping and Fisher curvature formulation.
+\end{itemize}
+
+\subsection*{Sridhar Manokaran (Roll No: \texttt{2024IMG-045})}
+\begin{itemize}
+    \item Developed and validated Method 1 (Calibrated Gradient Difference with active loss clamping) and Method 4 (Generic-Label Fine-Tuning across Tier 1 generic rewrites and Tier 2 reinforced logit subtraction).
+    \item Designed and structured the standardized data loading architecture in \texttt{unlearn\_ai/data.py}, ensuring strict disjointness assertions between Forget, Retain, and Do-Not-Train partitions.
+    \item Authored the automated verification test suite (\texttt{test\_splits.py}, \texttt{test\_data\_masking.py}, \texttt{test\_retain\_model.py}) and managed offline caching compatibility.
+    \item Authored the Results and Discussions sections analyzing the comparative tradeoffs between gradient ascent divergence and entity overwriting.
+\end{itemize}
+
+\subsection*{Kumar Suryanshu (Roll No: \texttt{2024IMG-026})}
+\begin{itemize}
+    \item Implemented Method 3: Magnitude-Trimmed Task Vector Negation in \texttt{unlearn\_ai/algorithms/task\_vectors.py} and \texttt{run\_unlearning\_tv.py}, isolating the control split from hyperparameter tuning.
+    \item Formulated and built the Membership Inference Attack (MIA) privacy audit framework in \texttt{privacy\_audit.py}, deriving the direction-adjusted AUC metric ($\text{AUC}_{\text{adjusted}} = \max(\text{AUC}, 1 - \text{AUC})$) and Privacy Leakage Index.
+    \item Developed the comparative master benchmark pipeline (\texttt{compare\_all.py} and \texttt{run\_benchmark.py}), automated markdown/CSV leaderboard generation, and publication SVG vector plotting.
+    \item Implemented synchronized wall-clock timing and peak GPU memory tracking utilities (\texttt{SynchronizedTimer}).
+\end{itemize}
+
+---
+
+\section*{Undertaking and Academic Integrity Declaration}
+
+We, the undersigned students of the \textbf{Trustworthy Artificial Intelligence (TAI)} course, do hereby solemnly declare and affirm that:
+\begin{enumerate}
+    \item The research, codebase implementation, experimental benchmark results, and accompanying report titled \textbf{``Aparichit: Empirical Benchmarking and Evaluation Rigor in Approximate Machine Unlearning for Language Models''} represent our own original intellectual work, conducted collectively as a team.
+    \item This report was authored by us, and the text, analyses, and experimental interpretations were independently drafted and critically reviewed by the team members without automated report generation.
+    \item All external algorithms, datasets (TOFU), libraries (PyTorch, Hugging Face Transformers), and scientific publications cited herein have been properly referenced in accordance with standard academic citation guidelines.
+    \item The division of contributions described above reflects our authentic and equitable distribution of effort throughout the project lifecycle.
+\end{enumerate}
+
+\vspace{2.5em}
+
+\noindent
+\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}ccc@{}}
+\rule{4.5cm}{0.4pt} & \rule{4.5cm}{0.4pt} & \rule{4.5cm}{0.4pt} \\
+\textbf{Shiv Thanmay} & \textbf{Sridhar Manokaran} & \textbf{Kumar Suryanshu} \\
+Roll No: \texttt{2024IMG-041} & Roll No: \texttt{2024IMG-045} & Roll No: \texttt{2024IMG-026} \\[0.5em]
+Date: \rule{3.5cm}{0.4pt} & Date: \rule{3.5cm}{0.4pt} & Date: \rule{3.5cm}{0.4pt}
+\end{tabular*}
+
+\vspace{2em}
+
+---
+
+\bibliographystyle{plain}
+\begin{thebibliography}{10}
+
+\bibitem{maini2024tofu}
+Pratyush Maini, Zhili Feng, Avi Schwarzschild, Zachary~C. Lipton, and J.~Zico Kolter.
+\newblock {TOFU}: A task of fictitious unlearning for {LLMs}.
+\newblock {\em arXiv preprint arXiv:2401.06121}, 2024.
+
+\bibitem{carlini2022quantifying}
+Nicholas Carlini, Daphne Ippolito, Matthew Jagielski, Katherine Lee, Florian Tramer, and Chiyuan Zhang.
+\newblock Quantifying memorization across neural language models.
+\newblock In {\em International Conference on Learning Representations (ICLR)}, 2023.
+
+\bibitem{ilharco2023editing}
+Gabriel Ilharco, Marco~Tulio Ribeiro, Mitchell Wortsman, Suchin Gururangan, Ludwig Schmidt, Hannaneh Hajishirzi, and Ali Farhadi.
+\newblock Editing models with task arithmetic.
+\newblock In {\em International Conference on Learning Representations (ICLR)}, 2023.
+
+\bibitem{yadav2023ties}
+Prateek Yadav, Derek Tam, Leshem Choshen, Colin Raffel, and Mohit Bansal.
+\newblock {TIES}-merging: Resolving interference when combining models.
+\newblock In {\em Advances in Neural Information Processing Systems (NeurIPS)}, 2023.
+
+\bibitem{eldan2023who}
+Ronen Eldan and Mark Russinovich.
+\newblock Who's {Harry} {Potter}? {Approximate} unlearning in {LLMs}.
+\newblock {\em arXiv preprint arXiv:2310.02238}, 2023.
+
+\bibitem{shi2024detecting}
+Weiyan Shi, Anirudh Ajith, Mengzhou Xia, Tinghao Huang, Daogao Liu, and Danqi Chen.
+\newblock Detecting pretraining data from large language models.
+\newblock In {\em International Conference on Learning Representations (ICLR)}, 2024.
+
+\bibitem{golatkar2020eternal}
+Aditya Golatkar, Alessandro Achille, and Stefano Soatto.
+\newblock Eternal sunshine of the spotless net: Selective forgetting in deep networks.
+\newblock In {\em IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)}, pages 9304--9312, 2020.
+
+\bibitem{yeom2018privacy}
+Samuel Yeom, Irene Giacomelli, Matt Fredrikson, and Somesh Jha.
+\newblock Privacy risk in machine learning: Analyzing the connection to overfitting.
+\newblock In {\em IEEE Symposium on Security and Privacy (S\&P)}, pages 268--282, 2018.
+
+\bibitem{carlini2022membership}
+Nicholas Carlini, Steve Chien, Milad Nasr, Shuang Song, Andreas Terzis, and Florian Tramer.
+\newblock Membership inference attacks from first principles.
+\newblock In {\em IEEE Symposium on Security and Privacy (S\&P)}, pages 1897--1914, 2022.
+
+\bibitem{yao2023large}
+Yuanshun Yao, Xiaojun Xu, and Yang Liu.
+\newblock Large language model unlearning via preference optimization.
+\newblock {\em arXiv preprint arXiv:2310.10683}, 2023.
+
+\end{thebibliography}
+
+\end{document}

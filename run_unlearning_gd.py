@@ -108,6 +108,7 @@ def main():
         dnt_loader,
         forget_raw,
         retain_raw,
+        retain_full_raw,
         do_not_train_raw,
     ) = load_tofu_data(
         tokenizer,
