@@ -265,6 +265,12 @@ class BenchmarkRunner:
             else:
                 unlearn_time = "N/A"
 
+            pli_raw = pa.get("privacy_leakage_index")
+            if pli_raw is None:
+                adj_auc = pa.get("direction_adjusted_loss_auc", 0.50)
+                pli_raw = min(1.0, max(0.0, (adj_auc - 0.50) * 2.0))
+            pli_str = f"{float(pli_raw):.3f}"
+
             rows.append({
                 "Model / Method": data["display_name"],
                 "Forget Loss": f"{f_loss:.3f}",
@@ -276,6 +282,7 @@ class BenchmarkRunner:
                 "Delta Retain vs M_retain": delta_vs_ret_r,
                 "MIA Raw AUC": f"{pa['loss_threshold_mia_auc']:.3f}",
                 "MIA Adj AUC": f"{pa['direction_adjusted_loss_auc']:.3f}",
+                "PLI (0=safe)": pli_str,
                 "Unlearn Time": unlearn_time,
                 "Eval Time": f"{data['benchmark_time_seconds']:.1f}s",
             })
