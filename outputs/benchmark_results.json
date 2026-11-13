@@ -1,0 +1,122 @@
+{
+  "timestamp": "2026-11-13 06:40:47",
+  "evaluation_config": {
+    "forget_size": 400,
+    "retain_active_size": 400,
+    "do_not_train_size": 200
+  },
+  "results": {
+    "m_base": {
+      "display_name": "Reference: Pretrained (M_base)",
+      "evaluation": {
+        "forget": {"loss": 2.819, "rougeL_recall": 0.193},
+        "retain": {"loss": 2.928, "rougeL_recall": 0.162},
+        "unseen": {"loss": 2.836}
+      },
+      "privacy_audit": {
+        "raw_auc": 0.506,
+        "adjusted_auc": 0.506
+      },
+      "timing": {
+        "unlearn_time": null,
+        "eval_time": 471.7
+      }
+    },
+    "m_full": {
+      "display_name": "Baseline: Memorized Full (M_full)",
+      "evaluation": {
+        "forget": {"loss": 0.042, "rougeL_recall": 0.870},
+        "retain": {"loss": 0.029, "rougeL_recall": 0.927},
+        "unseen": {"loss": 3.978}
+      },
+      "privacy_audit": {
+        "raw_auc": 0.998,
+        "adjusted_auc": 0.998
+      },
+      "timing": {
+        "unlearn_time": null,
+        "eval_time": 376.1
+      }
+    },
+    "m_retain": {
+      "display_name": "Reference: Retain-Only Model (M_retain)",
+      "evaluation": {
+        "forget": {"loss": 4.069, "rougeL_recall": 0.273},
+        "retain": {"loss": 0.033, "rougeL_recall": 0.927},
+        "unseen": {"loss": 4.109}
+      },
+      "privacy_audit": {
+        "raw_auc": 0.502,
+        "adjusted_auc": 0.502
+      },
+      "timing": {
+        "unlearn_time": null,
+        "eval_time": 376.6
+      }
+    },
+    "m_unlearned_fisher": {
+      "display_name": "Method 2: Fisher Retain-Anchored (M_unlearned_fisher)",
+      "evaluation": {
+        "forget": {"loss": 9.113, "rougeL_recall": 0.237},
+        "retain": {"loss": 0.013, "rougeL_recall": 0.963},
+        "unseen": {"loss": 4.994}
+      },
+      "privacy_audit": {
+        "raw_auc": 0.349,
+        "adjusted_auc": 0.651
+      },
+      "timing": {
+        "unlearn_time": 120.0,
+        "eval_time": 316.6
+      }
+    },
+    "m_unlearned_gd": {
+      "display_name": "Method 1: Gradient Difference (M_unlearned_gd)",
+      "evaluation": {
+        "forget": {"loss": 10.324, "rougeL_recall": 0.195},
+        "retain": {"loss": 0.015, "rougeL_recall": 0.961},
+        "unseen": {"loss": 5.479}
+      },
+      "privacy_audit": {
+        "raw_auc": 0.276,
+        "adjusted_auc": 0.724
+      },
+      "timing": {
+        "unlearn_time": 93.1,
+        "eval_time": 323.5
+      }
+    },
+    "m_unlearned_generic_tier1": {
+      "display_name": "Method 4: Generic-Label Tier 1 (M_unlearned_generic_t1)",
+      "evaluation": {
+        "forget": {"loss": 0.337, "rougeL_recall": 0.751},
+        "retain": {"loss": 0.008, "rougeL_recall": 0.972},
+        "unseen": {"loss": 4.350}
+      },
+      "privacy_audit": {
+        "raw_auc": 0.999,
+        "adjusted_auc": 0.999
+      },
+      "timing": {
+        "unlearn_time": 73.1,
+        "eval_time": 362.5
+      }
+    },
+    "m_unlearned_tv": {
+      "display_name": "Method 3: Magnitude-Trimmed Task Vector (M_unlearned_tv)",
+      "evaluation": {
+        "forget": {"loss": 3.482, "rougeL_recall": 0.119},
+        "retain": {"loss": 1.879, "rougeL_recall": 0.130},
+        "unseen": {"loss": 3.851}
+      },
+      "privacy_audit": {
+        "raw_auc": 0.638,
+        "adjusted_auc": 0.638
+      },
+      "timing": {
+        "unlearn_time": 175.8,
+        "eval_time": 462.9
+      }
+    }
+  }
+}
