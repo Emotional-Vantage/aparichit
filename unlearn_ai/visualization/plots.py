@@ -7,12 +7,22 @@ from typing import Dict, Any, List, Optional
 
 
 METHOD_COLORS = {
-    "m_full_finetuned": "#d9534f",          # Crimson Red (Memorized baseline)
-    "m_unlearned_fisher": "#f0ad4e",        # Amber (Fisher)
-    "m_unlearned_tv": "#0284c7",            # Sky Blue (Task Vectors)
-    "m_unlearned_generic_tier2": "#16a34a", # Emerald Green (Generic-Label Tier 2)
-    "m_unlearned_gd": "#9333ea",            # Purple (Gradient Difference)
+    "m_base": "#64748b",
+    "m_full": "#d9534f",
+    "m_full_finetuned": "#d9534f",
+    "m_retain": "#10b981",
+    "m_unlearned_gd": "#9333ea",
+    "m_unlearned_fisher": "#f0ad4e",
+    "m_unlearned_tv": "#0284c7",
+    "m_unlearned_generic_tier1": "#06b6d4",
+    "m_unlearned_generic_tier2": "#16a34a",
 }
+
+
+def get_model_color(model_key: str) -> str:
+    """Returns color mapped to model key (case-insensitive)."""
+    norm = model_key.lower().strip()
+    return METHOD_COLORS.get(norm, "#4a5568")
 
 
 def escape_xml(text: str) -> str:
@@ -150,7 +160,7 @@ def plot_pareto_frontier(results: Dict[str, Any], output_path: Path):
             "label": report.get("display_name", model_key),
             "x": 1.0 - forget_rouge,  # Erasure Efficacy (0 to 1)
             "y": retain_rouge,         # Retain Retention (0 to 1)
-            "color": METHOD_COLORS.get(model_key, "#4a5568"),
+            "color": get_model_color(model_key),
         })
 
     svg = create_svg_scatter_chart(
@@ -184,7 +194,7 @@ def plot_privacy_utility_tradeoff(results: Dict[str, Any], output_path: Path):
             "label": report.get("display_name", model_key),
             "x": audit_res["loss_threshold_mia_auc"],
             "y": eval_res["retain"]["rougeL"],
-            "color": METHOD_COLORS.get(model_key, "#4a5568"),
+            "color": get_model_color(model_key),
         })
 
     svg = create_svg_scatter_chart(

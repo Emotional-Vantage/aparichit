@@ -256,9 +256,14 @@ class BenchmarkRunner:
             delta_vs_ret_f = f"{f_loss - ref_retain_f_loss:+.3f}" if ref_retain_f_loss is not None else "N/A"
             delta_vs_ret_r = f"{r_loss - ref_retain_r_loss:+.3f}" if ref_retain_r_loss is not None else "N/A"
 
-            unlearn_time = timing.get("total_unlearn_time", "N/A")
-            if unlearn_time != "N/A":
-                unlearn_time = f"{unlearn_time:.1f}s"
+            unlearn_time_raw = timing.get("total_unlearn_time", None)
+            if unlearn_time_raw is not None and unlearn_time_raw != "N/A":
+                try:
+                    unlearn_time = f"{float(unlearn_time_raw):.1f}s"
+                except (ValueError, TypeError):
+                    unlearn_time = str(unlearn_time_raw)
+            else:
+                unlearn_time = "N/A"
 
             rows.append({
                 "Model / Method": data["display_name"],
