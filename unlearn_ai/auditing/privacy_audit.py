@@ -12,10 +12,18 @@ class PrivacyAuditor:
     and completely unseen holdout data (Control set).
 
     Attack Paradigms:
-      1. Loss-Threshold Attack: Predicts membership using sequence cross-entropy / average log-likelihood.
+      1. Loss-Threshold Attack: Predicts membership using sequence average log-likelihood.
+         Score Direction: Higher log probability (lower loss) indicates greater confidence that the
+         sample was a member of the training distribution.
       2. Min-k% Prob Attack (Shi et al., 2023): Focuses on the bottom k% token probabilities,
          which are highly sensitive to memorized proper nouns, entities, and specific facts.
-      3. Entropy-Calibrated Likelihood: Normalizes likelihood by token predictive entropy.
+
+    Direction-Adjusted Metric:
+      If unlearning severely over-penalizes forget tokens, their log probability can fall BELOW
+      unseen holdout tokens, yielding a raw AUC < 0.50. An attacker knowing this can simply invert
+      their threshold to achieve (1 - AUC) attack success. Hence, we report both the raw AUC
+      and the direction-adjusted AUC:
+         AUC_adjusted = max(AUC, 1 - AUC)
     """
 
     def __init__(self, model, tokenizer, device=None):
@@ -68,7 +76,6 @@ class PrivacyAuditor:
                 for b in range(batch_size):
                     mask = (shift_labels[b] != -100)
                     raw_probs = target_log_probs[b][mask].cpu().tolist()
-                    # Filter any invalid numerical entries
                     valid_probs = [float(p) for p in raw_probs if not (math.isnan(p) or math.isinf(p))]
                     all_token_log_probs.append(valid_probs)
 
@@ -105,22 +112,26 @@ class PrivacyAuditor:
         forget_mink_scores = [compute_mink_score(lp) for lp in forget_token_logprobs]
         unseen_mink_scores = [compute_mink_score(lp) for lp in unseen_token_logprobs]
 
-        # Ground Truth Labels: Forget = 1 (private training member), Unseen = 0 (held-out control)
+        # Ground Truth Labels: Forget = 1 (target member), Unseen = 0 (unseen control)
         y_true = np.array([1] * len(forget_loss_scores) + [0] * len(unseen_loss_scores))
 
         # Loss-threshold MIA ROC-AUC
         loss_scores_all = np.array(forget_loss_scores + unseen_loss_scores)
         try:
-            loss_auc = float(roc_auc_score(y_true, loss_scores_all))
+            raw_loss_auc = float(roc_auc_score(y_true, loss_scores_all))
         except Exception:
-            loss_auc = 0.50
+            raw_loss_auc = 0.50
 
         # Min-k% Prob MIA ROC-AUC
         mink_scores_all = np.array(forget_mink_scores + unseen_mink_scores)
         try:
-            mink_auc = float(roc_auc_score(y_true, mink_scores_all))
+            raw_mink_auc = float(roc_auc_score(y_true, mink_scores_all))
         except Exception:
-            mink_auc = 0.50
+            raw_mink_auc = 0.50
+
+        # Direction-adjusted AUC: protects against inverted attackers when models over-penalize forget data
+        adj_loss_auc = float(max(raw_loss_auc, 1.0 - raw_loss_auc))
+        adj_mink_auc = float(max(raw_mink_auc, 1.0 - raw_mink_auc))
 
         # TPR at 5% False Positive Rate (FPR)
         try:
@@ -130,14 +141,14 @@ class PrivacyAuditor:
         except Exception:
             tpr_at_5pct_fpr = 0.0
 
-        # Privacy Leakage Index:
-        # Measures deviation from ideal privacy (AUC = 0.50).
-        # Scale: 0.0 (perfect privacy / coin flip) to 1.0 (complete data leakage).
-        privacy_leakage_index = float(min(1.0, abs(loss_auc - 0.50) * 2.0))
+        # Privacy Leakage Index (based on adjusted AUC deviation from ideal 0.50)
+        privacy_leakage_index = float(min(1.0, (adj_loss_auc - 0.50) * 2.0))
 
         return {
-            "loss_threshold_mia_auc": loss_auc,
-            "min_k_mia_auc": mink_auc,
+            "loss_threshold_mia_auc": raw_loss_auc,
+            "direction_adjusted_loss_auc": adj_loss_auc,
+            "min_k_mia_auc": raw_mink_auc,
+            "direction_adjusted_min_k_auc": adj_mink_auc,
             "tpr_at_5pct_fpr": tpr_at_5pct_fpr,
             "privacy_leakage_index": privacy_leakage_index,
             "forget_sample_count": len(forget_loss_scores),

@@ -3,8 +3,14 @@ Unit test verifying the strict 85% Retain / 10% Forget / 5% Unseen Holdout split
 """
 
 import unittest
-from datasets import load_dataset
-from unlearn_ai.data import get_standardized_splits, load_tofu_data
+
+try:
+    import torch
+    from datasets import load_dataset
+    from unlearn_ai.data import get_standardized_splits, load_tofu_data
+    HAS_DEPS = True
+except ImportError:
+    HAS_DEPS = False
 
 
 class DummyTokenizer:
@@ -20,6 +26,7 @@ class DummyTokenizer:
 
 class TestSplitsArchitecture(unittest.TestCase):
 
+    @unittest.skipUnless(HAS_DEPS, "torch and datasets must be installed for split testing")
     def test_strict_85_10_5_splits_proportions(self):
         """Verifies exact proportions: 10% Forget (400 QA), 85% Retain (3,400 QA), 5% Unseen (200 QA)."""
         tokenizer = DummyTokenizer()
@@ -48,7 +55,21 @@ class TestSplitsArchitecture(unittest.TestCase):
         overlap = retain_questions.intersection(unseen_questions)
         self.assertEqual(len(overlap), 0, "Retain and Unseen Control splits must be strictly disjoint")
 
+    @unittest.skipUnless(HAS_DEPS, "torch and datasets must be installed for split testing")
+    def test_active_retain_subset_default_400(self):
+        """Verifies default active retain subset size is exactly 400 QA pairs."""
+        tokenizer = DummyTokenizer()
+        (
+            _,
+            retain_loader,
+            _,
+            _,
+            retain_active_raw,
+            _,
+        ) = get_standardized_splits(tokenizer, retain_active_size=400, batch_size=4)
+
+        self.assertEqual(len(retain_active_raw), 400, "Active retain training subset must default to 400 QA pairs")
+
 
 if __name__ == "__main__":
     unittest.main()
-

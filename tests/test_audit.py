@@ -1,11 +1,17 @@
 import unittest
 import math
-import numpy as np
-from sklearn.metrics import roc_auc_score
+
+try:
+    import numpy as np
+    from sklearn.metrics import roc_auc_score
+    HAS_DEPS = True
+except ImportError:
+    HAS_DEPS = False
 
 
 class TestPrivacyAuditLogic(unittest.TestCase):
 
+    @unittest.skipUnless(HAS_DEPS, "numpy and sklearn must be installed for audit tests")
     def test_mia_auc_memorized_vs_unlearned(self):
         # Memorized model: forget loss is low (high likelihood), unseen loss is high (low likelihood)
         forget_scores_memorized = [-0.2, -0.3, -0.1, -0.4]
@@ -30,6 +36,7 @@ class TestPrivacyAuditLogic(unittest.TestCase):
         leakage_leak = min(1.0, abs(1.00 - 0.50) * 2.0)
         self.assertEqual(leakage_leak, 1.0)
 
+    @unittest.skipUnless(HAS_DEPS, "numpy must be installed for min_k_prob test")
     def test_min_k_prob_logic(self):
         # A sequence with 10 tokens where 2 are rare memorized names (-0.1) vs general words (-3.0)
         tokens_memorized = [-3.0, -2.8, -3.2, -3.1, -2.9, -3.0, -3.2, -2.8, -0.1, -0.2]

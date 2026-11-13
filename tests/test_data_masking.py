@@ -1,7 +1,12 @@
 import unittest
-import torch
 from unittest.mock import MagicMock
-from unlearn_ai.data import TOFUDataset, get_collate_fn
+
+try:
+    import torch
+    from unlearn_ai.data import TOFUDataset, get_collate_fn
+    HAS_DEPS = True
+except ImportError:
+    HAS_DEPS = False
 
 
 class DummyTokenizer:
@@ -10,7 +15,6 @@ class DummyTokenizer:
         self.eos_token_id = 2
 
     def __call__(self, text, add_special_tokens=False, **kwargs):
-        # Deterministic dummy tokenization: splits by space, returns ASCII ordinals
         words = text.split()
         ids = [min(ord(w[0]), 1000) for w in words]
         return {"input_ids": ids}
@@ -18,12 +22,13 @@ class DummyTokenizer:
 
 class TestDataMasking(unittest.TestCase):
 
+    @unittest.skipUnless(HAS_DEPS, "torch must be installed for data masking tests")
     def test_prompt_masking_with_minus_100(self):
         tokenizer = DummyTokenizer()
         raw_data = [
             {"question": "Who is the author?", "answer": "The author is Jane Doe."}
         ]
-        dataset = TOFUDataset(raw_data, tokenizer, max_length=64)
+        dataset = TOFUDataset(raw_data, tokenizer, max_length=64, mask_prompt=True)
         sample = dataset[0]
 
         input_ids = sample["input_ids"]
@@ -41,4 +46,3 @@ class TestDataMasking(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -9,6 +9,7 @@ from transformers import AutoModelForCausalLM
 
 from .base import BaseAlgorithm
 from .gradient_difference import evaluate_loss
+from unlearn_ai.utils import SynchronizedTimer
 
 
 def is_targeted_layer(name: str) -> bool:
@@ -27,12 +28,12 @@ def is_targeted_layer(name: str) -> bool:
     return False
 
 
-def apply_ties_trimming(
+def apply_magnitude_trimming(
     tau: Dict[str, torch.Tensor],
     trim_ratio: float = 0.20,
 ) -> Tuple[Dict[str, torch.Tensor], int, int]:
     """
-    Yadav et al. (TIES) magnitude trimming:
+    Magnitude Trimming (Yadav et al., 2023):
     Retains top `trim_ratio` (e.g. 20%) highest-magnitude weight displacements;
     zeros out bottom (1 - trim_ratio) diffuse noise.
     """
@@ -59,17 +60,27 @@ def apply_ties_trimming(
     return trimmed_tau, active_params, total_targeted
 
 
+# Backward compatibility alias
+apply_ties_trimming = apply_magnitude_trimming
+
+
 class TaskVectorUnlearning(BaseAlgorithm):
     """
-    Method 3: Task Vector Negation (Weight Arithmetic) for Language Model Unlearning.
-    Reference: Ilharco et al. (ICLR 2023) + Yadav et al. (NeurIPS 2023, TIES-Merging).
+    Method 3: Magnitude-Trimmed Task Vector Negation for Language Model Unlearning.
+    Reference: Ilharco et al. (ICLR 2023) task vector arithmetic with Yadav et al. (NeurIPS 2023) magnitude trimming.
+
+    Methodological Precision:
+      We apply magnitude trimming to zero out diffuse, low-magnitude noise from the task vector
+      before negation. Note that full TIES involves multi-task sign consensus resolution across
+      conflicting task vectors; because unlearning here operates on a single task vector
+      (theta_{M_forget} - theta_{M_base}), we perform magnitude-trimmed task-vector negation.
 
     Formulation:
       1. Train forget branch: M_forget fine-tuned solely on forget set for deep convergence.
       2. Construct task vector: tau = theta_{M_forget} - theta_{M_base} on Attention & MLP projections.
-      3. Apply TIES trimming: retain top-k% highest magnitude deltas, zeroing diffuse noise.
+      3. Apply magnitude trimming: retain top trim_ratio deltas, zeroing diffuse noise.
       4. Subtract scaled vector: theta_{unlearned} = theta_{M_full} - lambda * tau
-      5. Calibrate lambda via sweep to match Unseen Control loss.
+      5. Tune lambda (or use fixed lambda) strictly WITHOUT touching the unseen control split.
     """
 
     def __init__(
@@ -84,6 +95,7 @@ class TaskVectorUnlearning(BaseAlgorithm):
         forget_epochs: int = 12,
         forget_lr: float = 1e-4,
         target_retain_ceiling: float = 3.4,
+        target_forget_loss: float = 5.0,
     ):
         super().__init__(model, tokenizer, device, config)
         self.base_model = base_model
@@ -92,7 +104,9 @@ class TaskVectorUnlearning(BaseAlgorithm):
         self.forget_epochs = forget_epochs
         self.forget_lr = forget_lr
         self.target_retain_ceiling = target_retain_ceiling
+        self.target_forget_loss = target_forget_loss
         self.tau_forget: Dict[str, torch.Tensor] = {}
+        self.timing: Dict[str, float] = {}
 
     def extract_task_vector(
         self,
@@ -119,7 +133,7 @@ class TaskVectorUnlearning(BaseAlgorithm):
             model_forget.config.pad_token_id = self.tokenizer.pad_token_id
 
         forget_opt = torch.optim.AdamW(model_forget.parameters(), lr=self.forget_lr)
-        scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else None
+        scaler = torch.amp.GradScaler('cuda') if (self.device and self.device.type == 'cuda') else None
 
         for epoch in range(1, self.forget_epochs + 1):
             t_start = time.time()
@@ -169,12 +183,12 @@ class TaskVectorUnlearning(BaseAlgorithm):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # Apply TIES magnitude trimming
-        self.tau_forget, active_p, total_p = apply_ties_trimming(raw_tau, trim_ratio=self.trim_ratio)
+        # Apply magnitude trimming
+        self.tau_forget, active_p, total_p = apply_magnitude_trimming(raw_tau, trim_ratio=self.trim_ratio)
 
         if verbose:
             sparsity = 100.0 * (1.0 - active_p / max(total_p, 1))
-            print(f"TIES Trimming: Kept {active_p:,} active parameters ({100.0 - sparsity:.1f}%), zeroed {sparsity:.1f}% diffuse noise.")
+            print(f"Magnitude Trimming: Kept {active_p:,} active parameters ({100.0 - sparsity:.1f}%), zeroed {sparsity:.1f}% diffuse noise.")
 
         return self.tau_forget
 
@@ -182,7 +196,7 @@ class TaskVectorUnlearning(BaseAlgorithm):
         self,
         forget_loader: DataLoader,
         retain_loader: Optional[DataLoader] = None,
-        dnt_loader: Optional[DataLoader] = None,
+        reference_retain_model: Optional[nn.Module] = None,
         lambda_val: Optional[float] = None,
         candidate_lambdas: Optional[List[float]] = None,
         verbose: bool = True,
@@ -190,62 +204,76 @@ class TaskVectorUnlearning(BaseAlgorithm):
     ) -> nn.Module:
         """
         Executes Task Vector Negation unlearning.
-        If lambda_val is None, automatically sweeps over candidate lambdas
-        to minimize gap to dnt_loader control loss while protecting retain fluency.
+        The unseen control split is STRICTLY EXCLUDED from this method.
+        Tuning operates either with a fixed lambda or by referencing the target forget loss
+        and retain loss ceiling.
         """
-        if not self.tau_forget:
-            self.extract_task_vector(forget_loader, verbose=verbose)
+        # 1. Auxiliary Phase: Train M_forget branch & extract trimmed task vector
+        with SynchronizedTimer() as aux_timer:
+            if not self.tau_forget:
+                self.extract_task_vector(forget_loader, verbose=verbose)
 
-        full_state_cpu = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
+        # 2. Unlearning Phase: Apply trimmed task vector subtraction
+        with SynchronizedTimer() as unlearn_timer:
+            full_state_cpu = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
 
-        if lambda_val is not None:
-            candidates = [lambda_val]
-        else:
-            candidates = candidate_lambdas or [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6]
-
-        if verbose:
-            print(f"\n--- Calibrating Lambda Sweep across {candidates} ---")
-            print(f"{'Lambda':<8} | {'Forget Loss':<12} | {'Forget PPL':<12} | {'Retain Loss':<12} | {'Retain PPL':<12} | {'Score':<8}")
-            print("-" * 75)
-
-        best_lambda = candidates[0]
-        best_score = float("inf")
-        best_state = None
-
-        # Reference baseline DNT loss
-        dnt_target = evaluate_loss(self.model, dnt_loader, self.device) if dnt_loader else 4.0
-
-        for l_val in candidates:
-            trial_state = {}
-            for name, p_full in full_state_cpu.items():
-                if is_targeted_layer(name):
-                    trial_state[name] = (p_full - l_val * self.tau_forget[name]).to(self.device)
-                else:
-                    trial_state[name] = p_full.to(self.device)
-
-            self.model.load_state_dict(trial_state)
-
-            l_f = evaluate_loss(self.model, forget_loader, self.device)
-            l_r = evaluate_loss(self.model, retain_loader, self.device) if retain_loader else 0.0
-
-            ppl_f = math.exp(min(l_f, 20.0))
-            ppl_r = math.exp(min(l_r, 20.0))
-
-            gap = abs(l_f - dnt_target)
-            penalty = 2.5 * max(0.0, l_r - self.target_retain_ceiling)
-            score = gap + penalty
+            if lambda_val is not None:
+                candidates = [lambda_val]
+            else:
+                candidates = candidate_lambdas or [0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6]
 
             if verbose:
-                print(f"{l_val:<8.2f} | {l_f:<12.4f} | {ppl_f:<12.2f} | {l_r:<12.4f} | {ppl_r:<12.2f} | {score:<8.4f}")
+                print(f"\n--- Calibrating Lambda Sweep across {candidates} ---")
+                print(f"{'Lambda':<8} | {'Forget Loss':<12} | {'Forget PPL':<12} | {'Retain Loss':<12} | {'Retain PPL':<12} | {'Score':<8}")
+                print("-" * 75)
 
-            if score < best_score:
-                best_score = score
-                best_lambda = l_val
-                best_state = trial_state
+            best_lambda = candidates[0]
+            best_score = float("inf")
+            best_state = None
 
-        if verbose:
-            print("-" * 75)
-            print(f"[OK] Selected optimal lambda* = {best_lambda} (Score = {best_score:.4f})")
+            # Determine target forget reference without touching unseen control
+            if reference_retain_model is not None:
+                ref_target = evaluate_loss(reference_retain_model, forget_loader, self.device)
+            else:
+                ref_target = self.target_forget_loss
 
-        self.model.load_state_dict(best_state)
+            for l_val in candidates:
+                trial_state = {}
+                for name, p_full in full_state_cpu.items():
+                    if is_targeted_layer(name):
+                        trial_state[name] = (p_full - l_val * self.tau_forget[name]).to(self.device)
+                    else:
+                        trial_state[name] = p_full.to(self.device)
+
+                self.model.load_state_dict(trial_state)
+
+                l_f = evaluate_loss(self.model, forget_loader, self.device)
+                l_r = evaluate_loss(self.model, retain_loader, self.device) if retain_loader else 0.0
+
+                ppl_f = math.exp(min(l_f, 20.0))
+                ppl_r = math.exp(min(l_r, 20.0))
+
+                gap = abs(l_f - ref_target)
+                penalty = 2.5 * max(0.0, l_r - self.target_retain_ceiling)
+                score = gap + penalty
+
+                if verbose:
+                    print(f"{l_val:<8.2f} | {l_f:<12.4f} | {ppl_f:<12.2f} | {l_r:<12.4f} | {ppl_r:<12.2f} | {score:<8.4f}")
+
+                if score < best_score:
+                    best_score = score
+                    best_lambda = l_val
+                    best_state = trial_state
+
+            if verbose:
+                print("-" * 75)
+                print(f"[OK] Selected optimal lambda* = {best_lambda} (Score = {best_score:.4f})")
+
+            self.model.load_state_dict(best_state)
+
+        self.timing = {
+            "auxiliary_time": round(aux_timer.elapsed, 2),
+            "unlearning_time": round(unlearn_timer.elapsed, 2),
+            "total_unlearn_time": round(aux_timer.elapsed + unlearn_timer.elapsed, 2),
+        }
         return self.model

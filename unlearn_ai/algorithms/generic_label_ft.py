@@ -12,6 +12,7 @@ from transformers import AutoModelForCausalLM
 
 from .base import BaseAlgorithm
 from .gradient_difference import evaluate_loss
+from unlearn_ai.utils import SynchronizedTimer
 
 
 FORGET_AUTHORS = [
@@ -112,7 +113,12 @@ class GenericLabelUnlearning(BaseAlgorithm):
 
     Tiers:
       - Tier 1: Advanced anchor-sanitized generic fine-tuning.
+        Replaces sensitive author facts with natural generic descriptions
+        and fine-tunes on generic targets while anchoring retain knowledge.
       - Tier 2: Reinforcement Bootstrapping via mathematically grounded logit subtraction.
+        Constructs an over-trained forget model M_reinforced, computes the logit delta
+        over the base model (spike = relu(logits_reinf - logits_base)), and optimizes
+        a KL divergence loss penalizing token distributions toward base - alpha * spike.
     """
 
     def __init__(
@@ -133,6 +139,7 @@ class GenericLabelUnlearning(BaseAlgorithm):
         self.retain_weight = retain_weight
         self.alpha = alpha
         self.base_model_name = base_model_name
+        self.timing: Dict[str, float] = {}
 
     def unlearn(
         self,
@@ -144,7 +151,7 @@ class GenericLabelUnlearning(BaseAlgorithm):
     ) -> nn.Module:
         """
         Executes Generic-Label Fine-Tuning unlearning.
-        forget_loader should yield batches paired with generic rewrite labels.
+        forget_loader yields batches paired with generic rewrite labels.
         """
         if retain_loader is None:
             raise ValueError("Generic-label unlearning requires a retain_loader to anchor retain fluency.")
@@ -156,79 +163,110 @@ class GenericLabelUnlearning(BaseAlgorithm):
         base_model = None
         effective_epochs = epochs if self.tier == 1 else min(epochs, 3)
 
-        if self.tier == 2:
+        # 1. Auxiliary Phase (Tier 2 only: train M_reinforced and load M_base)
+        with SynchronizedTimer() as aux_timer:
+            if self.tier == 2:
+                if verbose:
+                    print("\n[Tier 2] Preparing M_reinforced branch (over-training on forget data for 3 epochs)...")
+                reinf_model = copy.deepcopy(self.model).to(self.device)
+                reinf_opt = torch.optim.AdamW(reinf_model.parameters(), lr=1e-4)
+
+                for r_ep in range(1, 4):
+                    reinf_model.train()
+                    for b in forget_loader:
+                        reinf_opt.zero_grad(set_to_none=True)
+                        b_in = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in b.items()}
+                        out = reinf_model(**b_in)
+                        out.loss.backward()
+                        reinf_opt.step()
+
+                reinf_model.eval()
+                del reinf_opt
+
+                if verbose:
+                    print("[Tier 2] Loading frozen M_base reference model...")
+                base_model = AutoModelForCausalLM.from_pretrained(self.base_model_name).to(self.device)
+                if self.tokenizer and self.tokenizer.pad_token_id is not None:
+                    base_model.config.pad_token_id = self.tokenizer.pad_token_id
+                base_model.eval()
+
+        # 2. Unlearning Phase
+        with SynchronizedTimer() as unlearn_timer:
+            optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr)
+            scaler = torch.amp.GradScaler('cuda') if (self.device and self.device.type == 'cuda') else None
+
             if verbose:
-                print("\n[Tier 2] Preparing M_reinforced branch (over-training on forget data for 3 epochs)...")
-            reinf_model = copy.deepcopy(self.model).to(self.device)
-            reinf_opt = torch.optim.AdamW(reinf_model.parameters(), lr=1e-4)
+                tier_name = "Tier 1: Generic Target Fine-Tuning" if self.tier == 1 else "Tier 2: Logit Subtraction Bootstrapping"
+                print(f"\n--- Starting {tier_name} for {effective_epochs} epochs ---")
+                print(f"{'Epoch':<8} | {'Forget Target Loss':<20} | {'Retain Loss':<14}")
+                print("-" * 50)
 
-            for r_ep in range(1, 4):
-                reinf_model.train()
-                for b in forget_loader:
-                    reinf_opt.zero_grad(set_to_none=True)
-                    b_in = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in b.items()}
-                    out = reinf_model(**b_in)
-                    out.loss.backward()
-                    reinf_opt.step()
+            for epoch in range(1, effective_epochs + 1):
+                self.model.train()
+                running_gen_loss, running_ret_loss, batches = 0.0, 0.0, 0
+                retain_iter = iter(retain_loader)
 
-            reinf_model.eval()
-            del reinf_opt
+                for f_batch in forget_loader:
+                    try:
+                        ret_batch = next(retain_iter)
+                    except StopIteration:
+                        retain_iter = iter(retain_loader)
+                        ret_batch = next(retain_iter)
 
-            if verbose:
-                print("[Tier 2] Loading frozen M_base reference model...")
-            base_model = AutoModelForCausalLM.from_pretrained(self.base_model_name).to(self.device)
-            if self.tokenizer and self.tokenizer.pad_token_id is not None:
-                base_model.config.pad_token_id = self.tokenizer.pad_token_id
-            base_model.eval()
+                    optimizer.zero_grad(set_to_none=True)
+                    f_inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in f_batch.items()}
+                    ret_inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in ret_batch.items()}
 
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr)
-        scaler = torch.amp.GradScaler('cuda') if self.device.type == 'cuda' else None
-
-        if verbose:
-            tier_name = "Tier 1: Generic Target Fine-Tuning" if self.tier == 1 else "Tier 2: Logit Subtraction Bootstrapping"
-            print(f"\n--- Starting {tier_name} for {effective_epochs} epochs ---")
-            print(f"{'Epoch':<8} | {'Forget Target Loss':<20} | {'Retain Loss':<14}")
-            print("-" * 50)
-
-        for epoch in range(1, effective_epochs + 1):
-            self.model.train()
-            running_gen_loss, running_ret_loss, batches = 0.0, 0.0, 0
-            retain_iter = iter(retain_loader)
-
-            for f_batch in forget_loader:
-                try:
-                    ret_batch = next(retain_iter)
-                except StopIteration:
-                    retain_iter = iter(retain_loader)
-                    ret_batch = next(retain_iter)
-
-                optimizer.zero_grad(set_to_none=True)
-                f_inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in f_batch.items()}
-                ret_inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in ret_batch.items()}
-
-                if self.tier == 1:
-                    # Tier 1: Direct Causal LM loss on generic targets
-                    if scaler is not None:
-                        with torch.amp.autocast('cuda'):
+                    if self.tier == 1:
+                        # Tier 1: Direct Causal LM loss on generic targets
+                        if scaler is not None:
+                            with torch.amp.autocast('cuda'):
+                                loss_gen = self.model(**f_inputs).loss
+                                loss_ret = self.model(**ret_inputs).loss
+                                combined_loss = loss_gen + self.retain_weight * loss_ret
+                            scaler.scale(combined_loss).backward()
+                            scaler.unscale_(optimizer)
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                            scaler.step(optimizer)
+                            scaler.update()
+                        else:
                             loss_gen = self.model(**f_inputs).loss
                             loss_ret = self.model(**ret_inputs).loss
                             combined_loss = loss_gen + self.retain_weight * loss_ret
-                        scaler.scale(combined_loss).backward()
-                        scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        scaler.step(optimizer)
-                        scaler.update()
+                            combined_loss.backward()
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                            optimizer.step()
                     else:
-                        loss_gen = self.model(**f_inputs).loss
-                        loss_ret = self.model(**ret_inputs).loss
-                        combined_loss = loss_gen + self.retain_weight * loss_ret
-                        combined_loss.backward()
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        optimizer.step()
-                else:
-                    # Tier 2: Grounded Logit Subtraction
-                    if scaler is not None:
-                        with torch.amp.autocast('cuda'):
+                        # Tier 2: Grounded Logit Subtraction
+                        if scaler is not None:
+                            with torch.amp.autocast('cuda'):
+                                curr_out = self.model(**f_inputs)
+                                curr_logits = curr_out.logits
+
+                                with torch.no_grad():
+                                    base_logits = base_model(**f_inputs).logits
+                                    reinf_logits = reinf_model(**f_inputs).logits.to(base_logits.dtype)
+                                    spike = F.relu(reinf_logits - base_logits)
+                                    v_target = base_logits - self.alpha * spike
+                                    v_target = torch.clamp(v_target, min=-20.0, max=20.0)
+                                    target_probs = F.softmax(v_target, dim=-1)
+
+                                curr_log_probs = F.log_softmax(curr_logits, dim=-1)
+                                labels = f_inputs["labels"]
+                                valid_mask = (labels != -100).float()
+                                token_kl = F.kl_div(curr_log_probs, target_probs, reduction='none').sum(dim=-1)
+                                kl_loss = (token_kl * valid_mask).sum() / max(valid_mask.sum(), 1.0)
+
+                                loss_ret = self.model(**ret_inputs).loss
+                                loss_gen = 0.5 * curr_out.loss + 0.5 * kl_loss
+                                combined_loss = loss_gen + self.retain_weight * loss_ret
+
+                            scaler.scale(combined_loss).backward()
+                            scaler.unscale_(optimizer)
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                            scaler.step(optimizer)
+                            scaler.update()
+                        else:
                             curr_out = self.model(**f_inputs)
                             curr_logits = curr_out.logits
 
@@ -243,7 +281,6 @@ class GenericLabelUnlearning(BaseAlgorithm):
                             curr_log_probs = F.log_softmax(curr_logits, dim=-1)
                             labels = f_inputs["labels"]
                             valid_mask = (labels != -100).float()
-                            # Sum over vocab (dim=-1) before token-averaging
                             token_kl = F.kl_div(curr_log_probs, target_probs, reduction='none').sum(dim=-1)
                             kl_loss = (token_kl * valid_mask).sum() / max(valid_mask.sum(), 1.0)
 
@@ -251,45 +288,18 @@ class GenericLabelUnlearning(BaseAlgorithm):
                             loss_gen = 0.5 * curr_out.loss + 0.5 * kl_loss
                             combined_loss = loss_gen + self.retain_weight * loss_ret
 
-                        scaler.scale(combined_loss).backward()
-                        scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        scaler.step(optimizer)
-                        scaler.update()
-                    else:
-                        curr_out = self.model(**f_inputs)
-                        curr_logits = curr_out.logits
+                            combined_loss.backward()
+                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                            optimizer.step()
 
-                        with torch.no_grad():
-                            base_logits = base_model(**f_inputs).logits
-                            reinf_logits = reinf_model(**f_inputs).logits.to(base_logits.dtype)
-                            spike = F.relu(reinf_logits - base_logits)
-                            v_target = base_logits - self.alpha * spike
-                            v_target = torch.clamp(v_target, min=-20.0, max=20.0)
-                            target_probs = F.softmax(v_target, dim=-1)
+                    running_gen_loss += loss_gen.item()
+                    running_ret_loss += loss_ret.item()
+                    batches += 1
 
-                        curr_log_probs = F.log_softmax(curr_logits, dim=-1)
-                        labels = f_inputs["labels"]
-                        valid_mask = (labels != -100).float()
-                        token_kl = F.kl_div(curr_log_probs, target_probs, reduction='none').sum(dim=-1)
-                        kl_loss = (token_kl * valid_mask).sum() / max(valid_mask.sum(), 1.0)
-
-                        loss_ret = self.model(**ret_inputs).loss
-                        loss_gen = 0.5 * curr_out.loss + 0.5 * kl_loss
-                        combined_loss = loss_gen + self.retain_weight * loss_ret
-
-                        combined_loss.backward()
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-                        optimizer.step()
-
-                running_gen_loss += loss_gen.item()
-                running_ret_loss += loss_ret.item()
-                batches += 1
-
-            if verbose:
-                avg_g = running_gen_loss / max(batches, 1)
-                avg_r = running_ret_loss / max(batches, 1)
-                print(f"Epoch {epoch:02d} | {avg_g:<20.4f} | {avg_r:<14.4f}")
+                if verbose:
+                    avg_g = running_gen_loss / max(batches, 1)
+                    avg_r = running_ret_loss / max(batches, 1)
+                    print(f"Epoch {epoch:02d} | {avg_g:<20.4f} | {avg_r:<14.4f}")
 
         if reinf_model is not None:
             del reinf_model
@@ -298,4 +308,9 @@ class GenericLabelUnlearning(BaseAlgorithm):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        self.timing = {
+            "auxiliary_time": round(aux_timer.elapsed, 2),
+            "unlearning_time": round(unlearn_timer.elapsed, 2),
+            "total_unlearn_time": round(aux_timer.elapsed + unlearn_timer.elapsed, 2),
+        }
         return self.model

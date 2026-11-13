@@ -13,12 +13,18 @@ from transformers import PreTrainedTokenizer
 
 class TOFUDataset(Dataset):
     """
-    Combines 'Question: ... \\nAnswer:' with ' {answer}'.
-    Masks out the question tokens with -100 so that loss is only
-    calculated on the factual answer tokens.
+    Combines 'Question: {question}\\nAnswer:' with ' {answer}{eos}'.
+    When mask_prompt=True, masks out prompt tokens with -100 so that loss
+    is evaluated strictly on the factual target answer tokens.
     """
 
-    def __init__(self, hf_dataset, tokenizer: PreTrainedTokenizer, max_length: int = 128):
+    def __init__(
+        self,
+        hf_dataset,
+        tokenizer: PreTrainedTokenizer,
+        max_length: int = 128,
+        mask_prompt: bool = True,
+    ):
         self.examples = []
         for row in hf_dataset:
             question = row["question"].strip()
@@ -30,15 +36,15 @@ class TOFUDataset(Dataset):
             prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
             full_ids = tokenizer(full_text, add_special_tokens=False)["input_ids"] + [tokenizer.eos_token_id]
 
-            # In causal LM, tokens beyond the prompt are the target answer
             prompt_len = len(prompt_ids)
             labels = list(full_ids)
 
-            # Mask the prompt tokens with -100
-            for i in range(min(prompt_len, len(labels))):
-                labels[i] = -100
+            if mask_prompt:
+                # Mask prompt tokens with -100 so loss is calculated on target answer
+                for i in range(min(prompt_len, len(labels))):
+                    labels[i] = -100
 
-            # Truncate to max_length if needed
+            # Truncate to max_length
             full_ids = full_ids[:max_length]
             labels = labels[:max_length]
 
@@ -55,8 +61,8 @@ class TOFUDataset(Dataset):
 
 
 def get_collate_fn(tokenizer: PreTrainedTokenizer):
-    """Dynamically pad input_ids and labels to the max length in this batch."""
-    pad_id = tokenizer.pad_token_id
+    """Dynamically pad input_ids and labels to the max length in the batch."""
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
 
     def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
         max_len = max(len(item["input_ids"]) for item in batch)
@@ -72,7 +78,6 @@ def get_collate_fn(tokenizer: PreTrainedTokenizer):
 
             padded_inputs = torch.cat([input_ids, torch.full((pad_len,), pad_id, dtype=torch.long)])
             attention_mask = torch.cat([torch.ones(len(input_ids), dtype=torch.long), torch.zeros(pad_len, dtype=torch.long)])
-            # Padding positions are also masked with -100
             padded_labels = torch.cat([labels, torch.full((pad_len,), -100, dtype=torch.long)])
 
             batch_input_ids.append(padded_inputs)
@@ -94,45 +99,67 @@ def load_tofu_data(
     retain_active_size: Optional[int] = 400,
     batch_size: int = 4,
     max_length: int = 128,
-) -> Tuple[DataLoader, DataLoader, Optional[DataLoader], Any, Any, Optional[Any]]:
+    mask_prompt: bool = True,
+    seed: int = 42,
+) -> Tuple[DataLoader, DataLoader, DataLoader, Any, Any, Any, Any]:
     """
     Loads TOFU dataset strictly adhering to the 85% Retain / 10% Forget / 5% Unseen split:
-      - Forget Split: 10% (forget10: 20 authors = 400 QA pairs)
-      - Retain Split: 85% (3,400 QA pairs from retain90)
-      - Unseen Control: 5% (200 QA pairs from retain90, strictly NOT trained)
+      - 10% Forget Split: 20 authors = 400 QA pairs (from forget10)
+      - 85% Retain Split (Full): 170 authors = 3,400 QA pairs (from retain90 rows 0..3400)
+      - Retain Active Subset: default 400 QA pairs (prevents retain dominance during training)
+      - 5% Do-Not-Train / Unseen Control: 10 authors = 200 QA pairs (from retain90 rows 3400..3600)
+        Strictly EXCLUDED from ALL training (both M_full and M_retain) and hyperparameter tuning.
+
+    Returns:
+      (forget_loader, retain_loader, unseen_loader,
+       forget_raw, retain_active_raw, retain_full_raw, unseen_raw)
     """
-    forget_raw = load_dataset("locuslab/TOFU", "forget10")["train"]
+    forget_raw = load_dataset("locuslab/TOFU", forget_split)["train"]
     retain90_raw = load_dataset("locuslab/TOFU", "retain90")["train"]
 
-    retain_full_raw = retain90_raw.select(range(0, 3400))       # 85% Retain
-    untrained_raw = retain90_raw.select(range(3400, 3600))      # 5% Unseen Control
+    assert len(forget_raw) > 0, "Forget dataset is empty"
+    assert len(retain90_raw) >= 3600, f"Expected at least 3600 rows in retain90, got {len(retain90_raw)}"
 
-    if retain_active_size and retain_active_size < len(retain_full_raw):
-        retain_train_raw = retain_full_raw.select(range(retain_active_size))
+    # Strictly partition retain90: 3,400 Retain Full (85%) and 200 Unseen Control (5%)
+    retain_full_raw = retain90_raw.select(range(0, 3400))
+    unseen_raw = retain90_raw.select(range(3400, 3600))
+
+    # Active retain subset (default 400 QA pairs to balance with 400 QA forget set)
+    if retain_active_size is not None and retain_active_size < len(retain_full_raw):
+        retain_active_raw = retain_full_raw.select(range(retain_active_size))
     else:
-        retain_train_raw = retain_full_raw
+        retain_active_raw = retain_full_raw
+
+    # Strict Disjointness Assertions
+    retain_questions = set(row["question"].strip() for row in retain_full_raw)
+    unseen_questions = set(row["question"].strip() for row in unseen_raw)
+    forget_questions = set(row["question"].strip() for row in forget_raw)
+
+    assert retain_questions.isdisjoint(unseen_questions), (
+        "CRITICAL ERROR: Retain set and Unseen Control set overlap!"
+    )
+    assert forget_questions.isdisjoint(unseen_questions), (
+        "CRITICAL ERROR: Forget set and Unseen Control set overlap!"
+    )
 
     collate_fn = get_collate_fn(tokenizer)
 
-    forget_dataset = TOFUDataset(forget_raw, tokenizer, max_length=max_length)
-    retain_dataset = TOFUDataset(retain_train_raw, tokenizer, max_length=max_length)
+    forget_dataset = TOFUDataset(forget_raw, tokenizer, max_length=max_length, mask_prompt=mask_prompt)
+    retain_dataset = TOFUDataset(retain_active_raw, tokenizer, max_length=max_length, mask_prompt=mask_prompt)
+    unseen_dataset = TOFUDataset(unseen_raw, tokenizer, max_length=max_length, mask_prompt=mask_prompt)
 
     forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
     retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-
-    if untrained_raw is not None:
-        untrained_dataset = TOFUDataset(untrained_raw, tokenizer, max_length=max_length)
-        untrained_loader = DataLoader(untrained_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-    else:
-        untrained_loader = None
+    unseen_loader = DataLoader(unseen_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
     return (
         forget_loader,
         retain_loader,
-        untrained_loader,
+        unseen_loader,
         forget_raw,
+        retain_active_raw,
         retain_full_raw,
-        untrained_raw,
+        unseen_raw,
     )
 
 
@@ -142,34 +169,42 @@ def get_standardized_splits(
     batch_size: int = 4,
     max_length: int = 128,
     retain_active_size: Optional[int] = 400,
+    mask_prompt: bool = True,
 ) -> Tuple[DataLoader, DataLoader, DataLoader, Any, Any, Any]:
     """
-    Strict Standardized Split Architecture across Aparichit (85% Retain / 10% Forget / 5% Unseen):
-      - 10% Forget Split: 20 Authors (400 QA pairs from forget10)
-      - 85% Retain Split: 170 Authors (3,400 QA pairs from retain90)
-      - 5% Unseen Control: 10 Authors (200 QA pairs from retain90, strictly NOT trained)
+    Standardized evaluation split loader returning non-shuffled evaluation DataLoaders:
+      - forget_loader (400 QA pairs)
+      - retain_loader (active subset: default 400 QA pairs, or full 3,400 if retain_active_size=None)
+      - unseen_loader (200 QA pairs - strictly unlearned control)
     """
-    forget_raw = load_dataset("locuslab/TOFU", "forget10")["train"]
-    retain90_raw = load_dataset("locuslab/TOFU", "retain90")["train"]
-
-    # Strictly partition retain90: 85% Retain (3,400 QA) and 5% Unseen Control (200 QA)
-    retain_full_raw = retain90_raw.select(range(0, 3400))
-    unseen_raw = retain90_raw.select(range(3400, 3600))
-
-    if retain_active_size and retain_active_size < len(retain_full_raw):
-        retain_eval_raw = retain_full_raw.select(range(retain_active_size))
-    else:
-        retain_eval_raw = retain_full_raw
+    (
+        _,
+        _,
+        _,
+        forget_raw,
+        retain_active_raw,
+        retain_full_raw,
+        unseen_raw,
+    ) = load_tofu_data(
+        tokenizer=tokenizer,
+        forget_split="forget10",
+        retain_active_size=retain_active_size,
+        batch_size=batch_size,
+        max_length=max_length,
+        mask_prompt=mask_prompt,
+        seed=seed,
+    )
 
     collate_fn = get_collate_fn(tokenizer)
 
-    forget_dataset = TOFUDataset(forget_raw, tokenizer, max_length=max_length)
-    retain_dataset = TOFUDataset(retain_eval_raw, tokenizer, max_length=max_length)
-    unseen_dataset = TOFUDataset(unseen_raw, tokenizer, max_length=max_length)
+    eval_retain_raw = retain_active_raw if retain_active_size is not None else retain_full_raw
+
+    forget_dataset = TOFUDataset(forget_raw, tokenizer, max_length=max_length, mask_prompt=mask_prompt)
+    retain_dataset = TOFUDataset(eval_retain_raw, tokenizer, max_length=max_length, mask_prompt=mask_prompt)
+    unseen_dataset = TOFUDataset(unseen_raw, tokenizer, max_length=max_length, mask_prompt=mask_prompt)
 
     forget_loader = DataLoader(forget_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
     retain_loader = DataLoader(retain_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
     unseen_loader = DataLoader(unseen_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
-    return forget_loader, retain_loader, unseen_loader, forget_raw, retain_eval_raw, unseen_raw
-
+    return forget_loader, retain_loader, unseen_loader, forget_raw, eval_retain_raw, unseen_raw

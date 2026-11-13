@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from .base import BaseAlgorithm
+from unlearn_ai.utils import SynchronizedTimer
 
 
 def evaluate_loss(model: nn.Module, dataloader: DataLoader, device: Optional[torch.device] = None) -> float:
@@ -28,9 +29,18 @@ def evaluate_loss(model: nn.Module, dataloader: DataLoader, device: Optional[tor
 
 class FisherUnlearning(BaseAlgorithm):
     """
-    Method 2: Fisher-Constrained Unlearning on TOFU Benchmark.
-    
-    Targeting: Multi-head attention projections (c_attn, c_proj) and MLP layers.
+    Method 2: Empirical Diagonal Fisher Retain-Anchored Gradient Unlearning on TOFU.
+
+    Methodological Precision:
+      This method uses an empirical diagonal Fisher Information Matrix computed on retain
+      batches as a quadratic elastic anchor penalty. It is NOT noise injection or random
+      weight masking. Targeted parameters are penalized in proportion to their importance
+      for retain capability, allowing non-essential directions to move under gradient ascent.
+
+    Targeting:
+      Multi-head attention projections (c_attn, c_proj) and MLP layers (c_fc, c_proj).
+      Embeddings (wte, wpe) and layer norms (ln_1, ln_2, ln_f) are excluded from Fisher penalty.
+
     Objective:
       Loss = - clamp_ascent(L_forget, max=target_forget_loss)
              + alpha_retain * L_retain
@@ -59,11 +69,12 @@ class FisherUnlearning(BaseAlgorithm):
         self.target_keywords = target_keywords
         self.fisher_retain: Dict[str, torch.Tensor] = {}
         self.baseline_state: Dict[str, torch.Tensor] = {}
+        self.timing: Dict[str, float] = {}
 
     def compute_fisher(self, retain_loader: DataLoader, verbose: bool = True) -> Dict[str, torch.Tensor]:
         """
         Computes the Empirical Diagonal Fisher Information Matrix over retain data
-        for the targeted attention and MLP weight matrices.
+        for targeted attention and MLP weight matrices.
         """
         self.model.eval()
         self.fisher_retain = {}
@@ -112,6 +123,7 @@ class FisherUnlearning(BaseAlgorithm):
     ) -> nn.Module:
         """
         Executes Fisher-constrained gradient unlearning.
+        Tracks auxiliary computation (Fisher curvature) and unlearning step times separately.
         """
         if retain_loader is None:
             raise ValueError("Fisher unlearning requires a valid retain_loader to compute curvature and retain anchor.")
@@ -119,77 +131,85 @@ class FisherUnlearning(BaseAlgorithm):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # Cache baseline state theta_0 if not already cached
+        # Cache baseline state theta_0
         self.baseline_state = copy.deepcopy(self.model.state_dict())
 
-        # Compute retain Fisher if not already computed
-        if not self.fisher_retain:
-            self.compute_fisher(retain_loader, verbose=verbose)
+        # 1. Auxiliary Phase: Compute empirical Fisher curvature
+        with SynchronizedTimer() as aux_timer:
+            if not self.fisher_retain:
+                self.compute_fisher(retain_loader, verbose=verbose)
 
-        unlearn_optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr)
-
-        if verbose:
-            print(f"\n--- Starting Fisher-Constrained Unlearning for {epochs} epochs ---")
-            print(f"{'Epoch':<8} | {'Forget Loss':<13} | {'Forget PPL':<12} | {'Retain Loss':<13} | {'Retain PPL':<12}")
-            print("-" * 70)
-
-        for epoch in range(1, epochs + 1):
-            self.model.train()
-            retain_iter = iter(retain_loader)
-
-            for forget_batch in forget_loader:
-                unlearn_optimizer.zero_grad(set_to_none=True)
-
-                # 1. Forget Batch Ascent (Only ascend if below target to prevent collapse)
-                f_batch = {
-                    k: v.to(self.device) if isinstance(v, torch.Tensor) else v
-                    for k, v in forget_batch.items()
-                }
-                outputs_forget = self.model(**f_batch)
-                loss_f = outputs_forget.loss
-
-                if loss_f.item() < self.target_forget_loss:
-                    (-loss_f).backward()
-                del outputs_forget
-
-                # 2. Retain Batch Descent
-                try:
-                    retain_batch = next(retain_iter)
-                except StopIteration:
-                    retain_iter = iter(retain_loader)
-                    retain_batch = next(retain_iter)
-
-                r_batch = {
-                    k: v.to(self.device) if isinstance(v, torch.Tensor) else v
-                    for k, v in retain_batch.items()
-                }
-                outputs_retain = self.model(**r_batch)
-                loss_r = outputs_retain.loss
-                (self.alpha_retain * loss_r).backward()
-                del outputs_retain
-
-                # 3. Fisher Elastic Anchor Penalty
-                fisher_penalty = 0.0
-                for name, param in self.model.named_parameters():
-                    if name in self.fisher_retain:
-                        diff = param - self.baseline_state[name]
-                        fisher_penalty = fisher_penalty + (self.fisher_retain[name] * (diff ** 2)).sum()
-
-                (self.beta_fisher * fisher_penalty).backward()
-
-                # 4. Gradient clipping
-                if self.max_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
-
-                unlearn_optimizer.step()
-
-            # Evaluation
-            curr_f = evaluate_loss(self.model, forget_loader, self.device)
-            curr_r = evaluate_loss(self.model, retain_loader, self.device)
-            f_ppl = math.exp(min(curr_f, 20.0))
-            r_ppl = math.exp(min(curr_r, 20.0))
+        # 2. Unlearning Phase: Optimization with Fisher elastic anchor
+        with SynchronizedTimer() as unlearn_timer:
+            unlearn_optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.lr)
 
             if verbose:
-                print(f"Epoch {epoch:02d} | {curr_f:<13.4f} | {f_ppl:<12.1f} | {curr_r:<13.4f} | {r_ppl:<12.2f}")
+                print(f"\n--- Starting Fisher Retain-Anchored Unlearning for {epochs} epochs ---")
+                print(f"{'Epoch':<8} | {'Forget Loss':<13} | {'Forget PPL':<12} | {'Retain Loss':<13} | {'Retain PPL':<12}")
+                print("-" * 70)
 
+            for epoch in range(1, epochs + 1):
+                self.model.train()
+                retain_iter = iter(retain_loader)
+
+                for forget_batch in forget_loader:
+                    unlearn_optimizer.zero_grad(set_to_none=True)
+
+                    # 1. Forget Batch Ascent (clamped to prevent model collapse)
+                    f_batch = {
+                        k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                        for k, v in forget_batch.items()
+                    }
+                    outputs_forget = self.model(**f_batch)
+                    loss_f = outputs_forget.loss
+
+                    if loss_f.item() < self.target_forget_loss:
+                        (-loss_f).backward()
+                    del outputs_forget
+
+                    # 2. Retain Batch Descent
+                    try:
+                        retain_batch = next(retain_iter)
+                    except StopIteration:
+                        retain_iter = iter(retain_loader)
+                        retain_batch = next(retain_iter)
+
+                    r_batch = {
+                        k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                        for k, v in retain_batch.items()
+                    }
+                    outputs_retain = self.model(**r_batch)
+                    loss_r = outputs_retain.loss
+                    (self.alpha_retain * loss_r).backward()
+                    del outputs_retain
+
+                    # 3. Empirical Fisher Elastic Anchor Penalty
+                    fisher_penalty = 0.0
+                    for name, param in self.model.named_parameters():
+                        if name in self.fisher_retain:
+                            diff = param - self.baseline_state[name]
+                            fisher_penalty = fisher_penalty + (self.fisher_retain[name] * (diff ** 2)).sum()
+
+                    (self.beta_fisher * fisher_penalty).backward()
+
+                    # 4. Gradient clipping
+                    if self.max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.max_grad_norm)
+
+                    unlearn_optimizer.step()
+
+                # Evaluation
+                curr_f = evaluate_loss(self.model, forget_loader, self.device)
+                curr_r = evaluate_loss(self.model, retain_loader, self.device)
+                f_ppl = math.exp(min(curr_f, 20.0))
+                r_ppl = math.exp(min(curr_r, 20.0))
+
+                if verbose:
+                    print(f"Epoch {epoch:02d} | {curr_f:<13.4f} | {f_ppl:<12.1f} | {curr_r:<13.4f} | {r_ppl:<12.2f}")
+
+        self.timing = {
+            "auxiliary_time": round(aux_timer.elapsed, 2),
+            "unlearning_time": round(unlearn_timer.elapsed, 2),
+            "total_unlearn_time": round(aux_timer.elapsed + unlearn_timer.elapsed, 2),
+        }
         return self.model
