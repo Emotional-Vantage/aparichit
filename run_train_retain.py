@@ -5,9 +5,6 @@ from pathlib import Path
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-# Enable offline Hugging Face fallback
-os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from unlearn_ai.config import get_checkpoint_root, DEFAULT_SEED, DEFAULT_RETAIN_ACTIVE_SIZE
 from unlearn_ai.utils import set_seed, save_checkpoint, is_checkpoint_valid, SynchronizedTimer

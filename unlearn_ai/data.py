@@ -3,9 +3,6 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Dict, Any, List, Optional, Tuple
 
-# Enable offline fallback for Hugging Face datasets and models if cache exists
-os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from datasets import load_dataset
 from transformers import PreTrainedTokenizer
