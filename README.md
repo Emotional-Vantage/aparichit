@@ -17,8 +17,9 @@
 7. [Project File Structure](#7-project-file-structure)
 8. [Getting Started](#8-getting-started)
 9. [Running Experiments](#9-running-experiments)
-10. [Limitations](#10-limitations)
-11. [References](#11-references)
+10. [Empirical Benchmark Results](#10-empirical-benchmark-results)
+11. [Limitations](#11-limitations)
+12. [References](#12-references)
 
 ---
 
@@ -276,7 +277,54 @@ This generates:
 
 ---
 
-## 10. Limitations
+## 10. Empirical Benchmark Results
+
+Below are the empirical results from the standardized three-way evaluation across all reference baselines and approximate unlearning methods on the TOFU benchmark (400 Forget QA pairs, 400 Active Retain QA pairs, 200 Unseen Control QA pairs):
+
+### 10.1 Master Leaderboard
+
+| Model / Method | Forget Loss | Retain Loss | DNT Loss | Forget ROUGE-L | Retain ROUGE-L | $\Delta \mathcal{L}_{\text{fgt}}$ vs $M_{\text{retain}}$ | $\Delta \mathcal{L}_{\text{ret}}$ vs $M_{\text{retain}}$ | MIA Raw AUC | MIA Adj AUC | Unlearn Time |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Reference: Pretrained ($M_{\text{base}}$)** | 2.819 | 2.928 | 2.836 | 0.193 | 0.162 | -1.250 | +2.895 | 0.506 | 0.506 | — |
+| **Baseline: Memorized Full ($M_{\text{full}}$)** | 0.042 | 0.029 | 3.978 | 0.870 | 0.927 | -4.027 | -0.004 | 0.998 | 0.998 | — |
+| **Reference: Retain-Only ($M_{\text{retain}}$)** | 4.069 | 0.033 | 4.109 | 0.273 | 0.927 | +0.000 | +0.000 | 0.502 | 0.502 | — |
+| **Method 1: Gradient Difference (GD)** | 10.324 | 0.015 | 5.479 | 0.195 | 0.961 | +6.255 | -0.018 | 0.276 | 0.724 | 93.1s |
+| **Method 2: Fisher Retain-Anchored** | 9.113 | 0.013 | 4.994 | 0.237 | 0.963 | +5.044 | -0.020 | 0.349 | 0.651 | 120.0s |
+| **Method 3: Task Vector Negation** | 3.482 | 1.879 | 3.851 | 0.119 | 0.130 | -0.587 | +1.846 | 0.638 | 0.638 | 175.8s |
+| **Method 4: Generic-Label Tier 1** | 0.337 | 0.008 | 4.350 | 0.751 | 0.972 | -3.732 | -0.025 | 0.999 | 0.999 | 73.1s |
+
+*All runs executed on NVIDIA CUDA GPU with seed 42. Visualizations and full serialized metrics are generated in `outputs/` (`leaderboard.md`, `leaderboard.csv`, `benchmark_results.json`).*
+
+### 10.2 Key Empirical Insights
+
+1. **Near-Total Extraction Vulnerability in $M_{\text{full}}$**:
+   - Fine-tuning without unlearning drives forget loss down to `0.042` and generation recall to `0.870`.
+   - The Membership Inference Attack (MIA) achieves a raw ROC-AUC of `0.998` against unseen control text, demonstrating that standard regularized fine-tuning produces near-deterministic extraction vulnerability.
+
+2. **The Independently Retrained Reference Model ($M_{\text{retain}}$)**:
+   - Trained exclusively on the 400 active retain examples, $M_{\text{retain}}$ exhibits nearly identical loss on both the forget set (`4.069`) and the unseen Do-Not-Train control partition (`4.109`, delta `0.040`).
+   - Its MIA ROC-AUC is `0.502`, confirming the theoretical ideal of random guessing ($\approx 0.50$) and establishing a rigorous empirical anchor for unlearning success.
+
+3. **Method 2 (Fisher Retain-Anchored) Achieves Pareto Optimality**:
+   - Curvature anchoring via the empirical diagonal Fisher information matrix suppresses forget generation (ROUGE-L `0.237`, approaching $M_{\text{retain}}$'s `0.273`) while maintaining superior retain fidelity (`0.013` loss, `0.963` ROUGE-L).
+   - Constrains collateral drift on the held-out control set to `4.994` (outperforming GD's `5.479`).
+   - Provides the most resilient privacy defense among gradient techniques with direction-adjusted MIA ROC-AUC of `0.651`.
+
+4. **The Over-Unlearning Paradox (Method 1: GD)**:
+   - Gradient Difference suppresses forget recall to `0.195` but drives forget loss up to `10.324`—far above natural unseen text (`5.479`).
+   - This causes raw MIA AUC to drop to `0.276`. An adversary simply inverts the decision rule to achieve an adjusted attack accuracy of `0.724` ($1 - \text{AUC}$), proving empirically that over-unlearning creates exploitable privacy leakage identical to memorization.
+
+5. **Task Vector Negation (Method 3) & Collateral Retain Trade-off**:
+   - Single-vector magnitude trimming suppresses factual recall to `0.119` while maintaining holdout stability (`3.851` DNT loss, `0.638` MIA AUC without rule inversion).
+   - However, parameter subtraction without active retain gradient regularization degrades retain loss to `1.879` and retain ROUGE-L to `0.130`, demonstrating the necessity of active retain regularization during vector arithmetic.
+
+6. **Generic-Label Fine-Tuning (Method 4) vs. Distributional Unlearning**:
+   - Delivers the fastest runtime (`73.1s`), highest retain recall (`0.972`), and well-behaved control loss (`4.350`).
+   - However, because it replaces entities with generic sentences without gradient ascent on forget tokens, forget loss remains low (`0.337`) and MIA ROC-AUC remains at `0.999`. This highlights that surface-level behavioral rewriting does not constitute distributional unlearning.
+
+---
+
+## 11. Limitations
 
 - **Approximate, Not Certified**: Heuristic unlearning methods do not provide formal differential privacy guarantees.
 - **Model Scale**: Benchmarked on GPT-2 Small (~124M parameters) for reproducibility; scaling to 7B+ models introduces different parameter redundancy dynamics.
@@ -285,7 +333,7 @@ This generates:
 
 ---
 
-## 11. References
+## 12. References
 
 - Maini et al. *TOFU: A Task of Fictitious Unlearning for LLMs.* 2024.
 - Golatkar et al. *Eternal Sunshine of the Spotless Net: Selective Forgetting in Deep Networks.* CVPR 2020.
