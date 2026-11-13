@@ -21,7 +21,7 @@ METHOD_DISPLAY_NAMES = {
     "m_base": "Reference: Pretrained (M_base)",
     "m_full": "Baseline: Memorized Full (M_full)",
     "m_full_finetuned": "Baseline: Memorized Full (M_full)",
-    "m_retain": "Reference: Retain-Only Gold (M_retain)",
+    "m_retain": "Reference: Retain-Only Model (M_retain)",
     # Unlearned Models
     "m_unlearned_gd": "Method 1: Gradient Difference (M_unlearned_gd)",
     "m_unlearned_fisher": "Method 2: Fisher Retain-Anchored (M_unlearned_fisher)",
@@ -43,7 +43,7 @@ class BenchmarkRunner:
       2. Retain Set (Active 400 QA pair subset used for training)
       3. Do-Not-Train Set (Unseen control strictly excluded from all training)
 
-    Evaluates models relative to both M_full and the independently trained M_retain gold reference.
+    Evaluates models relative to both M_full and the independently trained M_retain reference.
     """
 
     def __init__(

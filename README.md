@@ -77,7 +77,7 @@ All experiments utilize GPT-2 Small (~124M parameters), trained and evaluated ac
             ┌────────────────┴────────────────┐
             ▼                                 ▼
 ┌───────────────────────────────┐ ┌───────────────────────────────┐
-│     Fine-Tuned Full Model     │ │   Retain-Only Gold Reference  │
+│     Fine-Tuned Full Model     │ │     Retain-Only Reference     │
 │           (M_full)            │ │          (M_retain)           │
 │  Trained on Forget + Retain   │ │ Trained on Active Retain Only │
 │         (800 QA total)        │ │         (400 QA total)        │
@@ -90,9 +90,9 @@ All experiments utilize GPT-2 Small (~124M parameters), trained and evaluated ac
 └───────────────────────────────┘
 ```
 
-1. **$M_{\text{base}}$ (Pretrained Reference)**: Untouched OpenAI GPT-2 checkpoint; lower bound that has never seen any TOFU data.
+1. **$M_{\text{base}}$ (Pretrained Reference)**: Untouched OpenAI GPT-2 checkpoint; lower bound evaluating performance prior to TOFU fine-tuning.
 2. **$M_{\text{full}}$ (Memorized Baseline)**: Fine-tuned from $M_{\text{base}}$ on both forget (400 QA) and active retain (400 QA) examples.
-3. **$M_{\text{retain}}$ (Retain-Only Reference)**: Independently fine-tuned from $M_{\text{base}}$ **strictly on the 400 active retain QA pairs**. It has never seen any forget or unseen control examples. It serves as the empirical gold standard for what a model that never saw the forget data should look like.
+3. **$M_{\text{retain}}$ (Retain-Only Reference)**: Independently fine-tuned from $M_{\text{base}}$ **strictly on the 400 active retain QA pairs**. It is trained without the forget or unseen control examples, serving as the retrained reference model for ideal unlearning behavior.
 4. **$M_{\text{unlearned}}$ (Unlearned Model)**: Result of applying an approximate unlearning algorithm to $M_{\text{full}}$.
 
 ---
@@ -134,7 +134,7 @@ Every model checkpoint ($M_{\text{base}}, M_{\text{full}}, M_{\text{retain}}, M_
 
 ### 5.2 Comparative Reference Analysis
 For every unlearned model, we report:
-- **$\Delta \text{Metric}(M_{\text{unlearned}}, M_{\text{retain}})$**: Difference relative to the gold-standard retain-only reference model.
+- **$\Delta \text{Metric}(M_{\text{unlearned}}, M_{\text{retain}})$**: Difference relative to the independently retrained retain-only reference model.
 - **$\Delta \text{Metric}(M_{\text{unlearned}}, M_{\text{full}})$**: Net change relative to the initial memorized model.
 
 ### 5.3 Privacy Auditing & Direction-Adjusted MIA ROC-AUC

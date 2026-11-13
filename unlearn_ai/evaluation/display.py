@@ -153,7 +153,7 @@ def render_evaluation_report(
     else:
         p_badge = "[bold red]✗ SEPARABLE FROM UNSEEN[/]"
     table.add_row(
-        "Gold Control Alignment (5%)",
+        "Held-Out Control Alignment (5%)",
         "Forget Quality (p-val)",
         f"{p_val:.2e}",
         "> 0.0500 (↑)",
@@ -165,7 +165,7 @@ def render_evaluation_report(
     ks_stat = results.get("ks_stat", 0.0)
     ks_badge = "[bold green]✓ LOW DISTANCE[/]" if ks_stat < 0.30 else "[bold yellow]⚠ MODERATE DISTANCE[/]"
     table.add_row(
-        "Gold Control Alignment (5%)",
+        "Held-Out Control Alignment (5%)",
         "Kolmogorov-Smirnov D",
         f"{ks_stat:.4f}",
         "0.0000 (↓)",

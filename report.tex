@@ -45,7 +45,7 @@
 \maketitle
 
 \begin{abstract}
-Large language models (LLMs) trained on extensive corpora inevitably memorize verbatim personal records, copyrighted texts, and sensitive biographical data. The legal establishment of privacy mandates, including the EU General Data Protection Regulation (GDPR) ``Right to be Forgotten'', necessitates effective techniques for selectively expunging targeted training examples from trained neural weights without the prohibitive cost of full retraining. This project presents \textbf{Aparichit}, a modular empirical benchmarking toolkit and rigorous evaluation protocol for approximate language model unlearning. We implement and evaluate four foundational algorithm families: Calibrated Gradient Difference (GD), Empirical Diagonal Fisher Retain-Anchored Gradient Unlearning, Magnitude-Trimmed Task Vector Negation, and Generic-Label Fine-Tuning with Reinforcement Bootstrapping. Crucially, we enforce methodological rigor by: (1) adopting a balanced active retain training subset ($N=400$) to prevent retain loss dominance, (2) training an explicit, independent retain-only gold reference model ($M_{\text{retain}}$), (3) conducting mandatory three-way evaluations across Forget, Retain, and strictly excluded Do-Not-Train (unseen control) splits, (4) computing direction-adjusted Membership Inference Attack (MIA) ROC-AUC metrics, and (5) providing isolated wall-clock timing breakdowns ($T_{\text{training}}$, $T_{\text{auxiliary}}$, $T_{\text{unlearning}}$, $T_{\text{evaluation}}$). We present comprehensive experimental formulations, comparative analytical discussions, and an authentic declaration of independent academic authorship.
+Large language models (LLMs) trained on extensive corpora inevitably memorize verbatim personal records, copyrighted texts, and sensitive biographical data. The legal establishment of privacy mandates, including the EU General Data Protection Regulation (GDPR) ``Right to be Forgotten'', necessitates effective techniques for selectively expunging targeted training examples from trained neural weights without the prohibitive cost of full retraining. This project presents \textbf{Aparichit}, a modular empirical benchmarking toolkit and rigorous evaluation protocol for approximate language model unlearning. We implement and evaluate four foundational algorithm families: Calibrated Gradient Difference (GD), Empirical Diagonal Fisher Retain-Anchored Gradient Unlearning, Magnitude-Trimmed Task Vector Negation, and Generic-Label Fine-Tuning with Reinforcement Bootstrapping. Crucially, we enforce methodological rigor by: (1) adopting a balanced active retain training subset ($N=400$) to prevent retain loss dominance, (2) training an explicit, independent retain-only reference model ($M_{\text{retain}}$), (3) conducting mandatory three-way evaluations across Forget, Retain, and strictly excluded Do-Not-Train (unseen control) splits, (4) computing direction-adjusted Membership Inference Attack (MIA) ROC-AUC metrics, and (5) providing isolated wall-clock timing breakdowns ($T_{\text{training}}$, $T_{\text{auxiliary}}$, $T_{\text{unlearning}}$, $T_{\text{evaluation}}$). We present comprehensive experimental formulations, comparative analytical discussions, and an authentic declaration of independent academic authorship.
 \end{abstract}
 
 \vspace{1em}
@@ -62,7 +62,7 @@ The widespread deployment of generative transformer architectures has revealed a
 Regulatory frameworks, including Article 17 of the GDPR (Right to Erasure) and the California Consumer Privacy Act (CCPA), legally compel data custodians to delete personal data upon request. In the context of deep learning, fulfilling this requirement requires \textit{machine unlearning}: modifying an already trained model $\mathcal{M}$ such that it behaves as if a specific subset $\mathcal{D}_{\text{forget}}$ had never been part of its training corpus.
 
 \subsection{The Fundamental Research Question}
-While the exact gold standard of machine unlearning is naive full retraining from scratch on the retained dataset $\mathcal{D}_{\text{retain}}$ (producing model $M_{\text{retain}}$), this approach scales prohibitively with model parameter count and corpus size. Consequently, the field has proposed various \textit{approximate unlearning} heuristics. However, existing literature frequently suffers from evaluation shortcomings, including:
+While the theoretical ideal of machine unlearning is exact retraining from scratch on the retained dataset $\mathcal{D}_{\text{retain}}$ (producing model $M_{\text{retain}}$), this approach scales prohibitively with model parameter count and corpus size. Consequently, the field has proposed various \textit{approximate unlearning} heuristics. However, existing literature frequently suffers from evaluation shortcomings, including:
 \begin{enumerate}
     \item Equating unlearning with intentional model destruction (e.g., inducing gibberish outputs on forget prompts).
     \item Comparing unlearned checkpoints only to the initial memorized model ($M_{\text{full}}$) without an actual trained retain-only reference ($M_{\text{retain}}$).
@@ -79,7 +79,7 @@ In response to these deficiencies, this research addresses the primary question:
 
 \section{Methodology}
 
-The core philosophy of Aparichit is that approximate unlearning cannot be evaluated in isolation. Every parameter update must be benchmarked against both an empirical lower reference (the unadapted base model), an empirical upper reference (the fully fine-tuned model), and an independently trained target gold reference (the retain-only model).
+The core philosophy of Aparichit is that approximate unlearning cannot be evaluated in isolation. Every parameter update must be benchmarked against both an empirical lower reference (the unadapted base model), an empirical upper reference (the fully fine-tuned model), and an independently trained retrained reference (the retain-only model).
 
 \subsection{Dataset and Standardized Split Architecture}
 We evaluate on the \textbf{TOFU} (Task of Fictitious Unlearning) benchmark~\cite{maini2024tofu}. TOFU consists of 200 fictitious author profiles, each comprising 20 question-answer pairs (4,000 QA pairs total). Because all biographical entities, publication titles, and dates are entirely synthetic, any domain recall exhibited by an evaluated model originates strictly from our controlled training phases.
@@ -106,7 +106,7 @@ All experiments employ the autoregressive GPT-2 architecture ($\sim 124$M parame
 \begin{enumerate}
     \item \textbf{$M_{\text{base}}$ (Pretrained Reference)}: Off-the-shelf GPT-2 checkpoint initialized prior to any TOFU exposure. Represents the lower capability bound.
     \item \textbf{$M_{\text{full}}$ (Memorized Baseline)}: Fine-tuned from $M_{\text{base}}$ on $\mathcal{D}_{\text{forget}} \cup \mathcal{D}_{\text{retain}}^{\text{active}}$ (800 QA pairs total) for 13 epochs ($\text{LR}=5\times 10^{-5}$, AdamW, batch size 4). Represents the compromised model containing memorized private facts.
-    \item \textbf{$M_{\text{retain}}$ (Retain-Only Gold Reference)}: Separately fine-tuned from $M_{\text{base}}$ \textbf{strictly and exclusively on $\mathcal{D}_{\text{retain}}^{\text{active}}$} (400 QA pairs) under identical hyperparameters. This model has never observed any token from $\mathcal{D}_{\text{forget}}$ or $\mathcal{D}_{\text{control}}$. It serves as the empirical ground truth for optimal unlearning.
+    \item \textbf{$M_{\text{retain}}$ (Retain-Only Retrained Reference)}: Separately fine-tuned from $M_{\text{base}}$ \textbf{strictly and exclusively on $\mathcal{D}_{\text{retain}}^{\text{active}}$} (400 QA pairs) under identical hyperparameters. This model has never observed any token from $\mathcal{D}_{\text{forget}}$ or $\mathcal{D}_{\text{control}}$. It serves as the empirical ground truth for optimal unlearning.
     \item \textbf{$M_{\text{unlearned}}$ (Unlearned Models)}: Resulting weights obtained after applying an approximate unlearning algorithm to $M_{\text{full}}$.
 \end{enumerate}
 
@@ -196,7 +196,7 @@ Table~\ref{tab:master_benchmark} summarizes the standardized empirical evaluatio
 \begin{table*}[htbp]
 \centering
 \small
-\caption{Comprehensive Three-Way Evaluation Benchmark across Forget, Retain, and Do-Not-Train splits. Differences ($\Delta$) are computed relative to the independently trained $M_{\text{retain}}$ gold reference.}
+\caption{Comprehensive Three-Way Evaluation Benchmark across Forget, Retain, and Do-Not-Train splits. Differences ($\Delta$) are computed relative to the independently retrained $M_{\text{retain}}$ reference.}
 \label{tab:master_benchmark}
 \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lcccccccc@{}}
 \toprule
@@ -206,7 +206,7 @@ Table~\ref{tab:master_benchmark} summarizes the standardized empirical evaluatio
 \midrule
 $M_{\text{base}}$ (Pretrained Base) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & -- \\
 $M_{\text{full}}$ (Memorized Baseline) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & -- \\
-$M_{\text{retain}}$ (\textbf{Gold Reference}) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & -- \\
+$M_{\text{retain}}$ (\textbf{Retrained Reference}) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & -- \\
 \midrule
 Method 1: Gradient Difference (GD) & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] \\
 Method 2: Fisher Retain-Anchored & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] & [TO FILL] \\
